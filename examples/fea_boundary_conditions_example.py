@@ -10,7 +10,20 @@ This script shows how to:
 import os
 import numpy as np
 from volco import run_simulation
-from volco_fea import analyze_voxel_matrix, Surface, select_nodes_by_predicate, select_nodes_in_box, export_visualization
+from volco_fea import (
+    analyze_voxel_matrix,
+    Surface,
+    select_nodes_by_predicate,
+    select_nodes_in_box,
+    export_visualization,
+    # Analysis utilities for simple, reusable metrics
+    compute_midplane_force,
+    compute_face_displacement_jump,
+    compute_effective_stress,
+    compute_effective_modulus,
+    average_strain_component,
+    get_cell_lengths,
+)
 
 
 def run_simple_mode_example(voxel_matrix, voxel_size):
@@ -257,10 +270,78 @@ def run_expert_mode_with_utilities_example(voxel_matrix, voxel_size):
     print("Expert Mode with Utilities example complete. Results saved to Results_volco/fea/boundary_examples/expert_mode_utilities.html")
 
 
+def run_periodic_mode_example(voxel_matrix, voxel_size):
+    """Run FEA analysis using Periodic Mode (affine PBC) with analysis utilities."""
+    print("\n=== Periodic Mode Example (Affine PBC) ===")
+
+    # Output directory (reuse boundary_examples folder)
+    os.makedirs("Results_volco/fea/boundary_examples", exist_ok=True)
+
+    # Material properties
+    material_properties = {
+        'young_modulus': 1500.0,  # MPa
+        'poisson_ratio': 0.30
+    }
+
+    # Periodic BC: 5% compression in Z (Ezz = -0.05)
+    boundary_conditions = {
+        "periodic": {
+            "enabled": True,
+            "Ezz": 0.05,
+            "rigid_removal": "fix-corner",
+            "method": "elimination",
+        }
+    }
+
+    # Run analysis without visualization to compute metrics
+    results = analyze_voxel_matrix(
+        voxel_matrix=voxel_matrix,
+        voxel_size=voxel_size,
+        material_properties=material_properties,
+        boundary_conditions=boundary_conditions,
+        visualization=False,
+    )
+
+    # Reusable analysis metrics
+    ezz = average_strain_component(results, component_index=2)
+    Fz = compute_midplane_force(results, voxel_size, axis=2)
+    avg_uz_jump = compute_face_displacement_jump(results, voxel_size, axis=2)
+    Lx, Ly, Lz = get_cell_lengths(results["nodes"])
+    sigma_eff = compute_effective_stress(Fz, results["nodes"], axis=2)
+    E_eff = compute_effective_modulus(Fz, results["nodes"], imposed_strain=-0.05, axis=2)
+
+    # Print summary
+    print("Summary (periodic compression in Z, 5%):")
+    print(f"  - Voxel matrix shape: {voxel_matrix.shape}, voxel_size: {voxel_size:.4f} mm")
+    print(f"  - Material: E={material_properties['young_modulus']:.1f} MPa, nu={material_properties['poisson_ratio']:.2f}")
+    print(f"  - Cell lengths (mm): Lx={Lx:.4f}, Ly={Ly:.4f}, Lz={Lz:.4f}")
+    print(f"  - Average ezz (element-center sampling): {ezz:.6f}")
+    print(f"  - z-face avg uz jump vs Ezz*Lz: {avg_uz_jump:.6e} vs {(-0.05 * Lz):.6e}")
+    print(f"  - Integrated Fz across Z mid-plane (N): {Fz:.6f}")
+    print(f"  - Effective sigma_zz (MPa): {sigma_eff:.6f}")
+    print(f"  - Effective modulus E_eff (MPa): {E_eff:.6f}")
+
+    # Optional visualization run
+    results_viz = analyze_voxel_matrix(
+        voxel_matrix=voxel_matrix,
+        voxel_size=voxel_size,
+        material_properties=material_properties,
+        boundary_conditions=boundary_conditions,
+        visualization=True,
+        result_type='von_mises',
+        scale_factor=10.0,
+        show_undeformed=False,
+    )
+    if 'visualization' in results_viz:
+        export_visualization(results_viz['visualization'], "Results_volco/fea/boundary_examples/periodic_mode.html")
+
+    print("Periodic Mode example complete. Results saved to Results_volco/fea/boundary_examples/periodic_mode.html")
+
+
 def main():
-    """Run all boundary condition examples."""
+    """Run all boundary condition examples (including Periodic Mode)."""
     print("Running Enhanced Boundary Condition System Examples")
-    
+
     # Run VOLCO simulation once
     print("Running VOLCO simulation...")
     output = run_simulation(
@@ -268,32 +349,36 @@ def main():
         printer_config_path='examples/printer_settings.json',
         sim_config_path='examples/simulation_settings.json'
     )
-    
+
     # Get the cropped voxel matrix from the simulation output
     voxel_matrix = output.cropped_voxel_space
     voxel_size = output._simulation.voxel_size
-    
+
     print(f"Simulation complete. Cropped voxel matrix shape: {voxel_matrix.shape}")
     print(f"Voxel size: {voxel_size} mm")
-    
-    # Run Simple Mode example
-    run_simple_mode_example(voxel_matrix, voxel_size)
-    
-    # Run Simple Mode Tension example
-    run_simple_mode_tension_example(voxel_matrix, voxel_size)
-    
-    # Run Expert Mode example
-    run_expert_mode_example(voxel_matrix, voxel_size)
-    
-    # Run Expert Mode with Utilities example
-    run_expert_mode_with_utilities_example(voxel_matrix, voxel_size)
-    
+
+    # # Run Simple Mode example
+    # run_simple_mode_example(voxel_matrix, voxel_size)
+
+    # # Run Simple Mode Tension example
+    # run_simple_mode_tension_example(voxel_matrix, voxel_size)
+
+    # # Run Expert Mode example
+    # run_expert_mode_example(voxel_matrix, voxel_size)
+
+    # # Run Expert Mode with Utilities example
+    # run_expert_mode_with_utilities_example(voxel_matrix, voxel_size)
+
+    # Run Periodic Mode example (Affine PBC)
+    run_periodic_mode_example(voxel_matrix, voxel_size)
+
     print("\nAll examples complete. Results saved to Results_volco/fea/boundary_examples/")
     print("Files generated:")
     print("  - Results_volco/fea/boundary_examples/simple_mode.html")
     print("  - Results_volco/fea/boundary_examples/simple_mode_tension.html")
     print("  - Results_volco/fea/boundary_examples/expert_mode.html")
     print("  - Results_volco/fea/boundary_examples/expert_mode_utilities.html")
+    print("  - Results_volco/fea/boundary_examples/periodic_mode.html")
 
 
 if __name__ == "__main__":

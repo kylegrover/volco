@@ -329,7 +329,7 @@ For complete examples, see:
 - [examples/fea_example.py](../../../examples/fea_example.py) - Basic example of FEA analysis
 - [examples/fea_save_results.py](../../../examples/fea_save_results.py) - Example of saving FEA results
 - [examples/fea_load_results.py](../../../examples/fea_load_results.py) - Example of loading and visualizing FEA results
-- [examples/fea_boundary_conditions_example.py](../../../examples/fea_boundary_conditions_example.py) - Examples of using the enhanced boundary condition system
+- [examples/fea_boundary_conditions_example.py](../../../examples/fea_boundary_conditions_example.py) - Enhanced boundary condition system, including Periodic Mode (affine PBC) example and simple effective metrics
 
 ## Module Structure
 
@@ -403,3 +403,113 @@ viz = visualize_fea(
 # Export to HTML file
 export_visualization(viz, "Results_volco/fea/von_mises_with_undeformed.html")
 ```
+## Periodic Boundary Conditions (PUC)
+
+This module supports affine periodic boundary conditions for rectangular voxel grids. Periodic constraints pair opposite faces and enforce displacement jumps consistent with a prescribed macroscopic strain tensor E.
+
+Configuration (in boundary_conditions):
+
+```python
+boundary_conditions = {
+    "periodic": {
+        "enabled": True,
+        # Macroscopic normal strains
+        "Exx": 0.01,
+        "Eyy": 0.00,
+        "Ezz": 0.00,
+        # Macroscopic shear strains (engineering by default, γ = 2*E_xy etc.)
+        "Exy": 0.02,  # engineering γ_xy; internally converted to tensor Exy = γ/2
+        "Exz": 0.00,
+        "Eyz": 0.00,
+        # Rigid body removal options:
+        # - "fix-corner": fix one corner node DOFs (default)
+        # - "zero-mean": subtract mean displacement after solving
+        "rigid_removal": "fix-corner",
+        # Method: "elimination" (preferred); "lagrange" not implemented
+        "method": "elimination",
+        # Optional: "engineering_shear": True by default
+    }
+}
+```
+
+How it works:
+- The voxel mesh nodes lie on a rectilinear grid with spacing voxel_size and extents (Lx, Ly, Lz).
+- Only positive faces are paired to avoid duplicate constraints:
+  - (0,j,k) ↔ (Nx,j,k), Δu = E · a1, a1 = [Lx, 0, 0]
+  - (i,0,k) ↔ (i,Ny,k), Δu = E · a2, a2 = [0, Ly, 0]
+  - (i,j,0) ↔ (i,j,Nz), Δu = E · a3, a3 = [0, 0, Lz]
+- Component form (example for x-face): 
+  - ux(r) − ux(l) = Exx·Lx
+  - uy(r) − uy(l) = Exy·Lx
+  - uz(r) − uz(l) = Exz·Lx
+- Constraints are imposed by DOF elimination: slave DOFs are expressed in terms of master DOFs plus constant affine offsets. The system is reduced and solved; full displacements are recovered by back-substitution. Rigid body modes are removed either by fixing a corner (default) or by subtracting zero-mean translation.
+
+Examples:
+
+1) Uniaxial strain Exx:
+```python
+bc = {
+    "periodic": {
+        "enabled": True,
+        "Exx": 0.01,
+        "rigid_removal": "fix-corner",
+        "method": "elimination",
+    }
+}
+results = analyze_voxel_matrix(voxel_matrix, voxel_size, boundary_conditions=bc, visualization=False)
+```
+Opposite x-faces will differ in ux by Exx·Lx.
+
+2) Pure shear Exy (engineering shear):
+```python
+gamma = 0.02  # engineering shear γ_xy
+bc = {
+    "periodic": {
+        "enabled": True,
+        "Exy": gamma,  # interpreted as engineering shear; internally Exy_tensor = gamma/2
+        "rigid_removal": "fix-corner",
+        "method": "elimination",
+    }
+}
+results = analyze_voxel_matrix(voxel_matrix, voxel_size, boundary_conditions=bc, visualization=False)
+```
+Opposite y-faces will differ in ux by 0.5·γ·Ly.
+
+Notes:
+- Assumes a rectangular voxel grid and that boundary nodes exist on all faces.
+- Only translational DOFs are present in the current solver.
+- Provide either non-periodic constraints via the existing enhanced BC system or a periodic section; not both.
+
+### Analysis Utilities (forces, effective stress/modulus)
+
+For quick post-processing of FEA results (periodic or non-periodic), `volco_fea` exposes utilities to compute resultant forces across a mid-plane, opposite-face displacement jumps, effective stress, effective modulus, and average strain components.
+
+Usage:
+```python
+from volco_fea import (
+    compute_midplane_force,
+    compute_face_displacement_jump,
+    compute_effective_stress,
+    compute_effective_modulus,
+    average_strain_component,
+    get_cell_lengths,
+)
+
+# Given: results = analyze_voxel_matrix(...), voxel_size in mm
+
+# Average ezz (element-center sampling)
+ezz_avg = average_strain_component(results, component_index=2)
+
+# Mid-plane resultant force in Z (N), using σzz only
+Fz = compute_midplane_force(results, voxel_size, axis=2)
+
+# Opposite Z-face displacement jump (uz at +Z minus uz at -Z)
+uz_jump = compute_face_displacement_jump(results, voxel_size, axis=2)
+
+# Effective stress and modulus along Z
+Lx, Ly, Lz = get_cell_lengths(results["nodes"])
+sigma_eff = compute_effective_stress(Fz, results["nodes"], axis=2)  # MPa
+E_eff = compute_effective_modulus(Fz, results["nodes"], imposed_strain=-0.05, axis=2)  # MPa for 5% compression
+```
+
+These helpers are demonstrated in the Periodic Mode example inside [examples/fea_boundary_conditions_example.py](../../../examples/fea_boundary_conditions_example.py).

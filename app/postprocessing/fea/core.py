@@ -13,6 +13,7 @@ from .solver import solve_static_problem
 from .boundary import apply_boundary_conditions, Surface
 from .viz import visualize_fea
 from .io import save_results
+from .periodic import solve_static_problem_periodic
 
 
 def analyze_voxel_matrix(
@@ -72,23 +73,43 @@ def analyze_voxel_matrix(
     # Generate FE mesh from voxel matrix
     nodes, elements = generate_mesh(voxel_matrix, voxel_size)
     
-    # Apply boundary conditions (must be supplied)
-    if boundary_conditions is None:
-        raise ValueError("Boundary conditions must be supplied. "
-                        "Please use the format: {'constraints': {Surface.MINUS_Z: 'fix', ...}}")
-    
-    # Check if constraints are specified in the new format
-    if 'constraints' in boundary_conditions:
-        constraints = boundary_conditions.get('constraints', {})
-        dofs, forces = apply_boundary_conditions(nodes, elements, constraints)
+    # Boundary condition handling:
+    # - If periodic BC is enabled under boundary_conditions['periodic'] or ['PeriodicBC'],
+    #   route to periodic solver using DOF elimination with affine jumps.
+    # - Otherwise, use the existing constraints-based Dirichlet handling.
+    periodic_cfg = None
+    if boundary_conditions is not None:
+        periodic_cfg = boundary_conditions.get('periodic') or boundary_conditions.get('PeriodicBC')
+
+    if periodic_cfg and isinstance(periodic_cfg, dict) and periodic_cfg.get('enabled', False):
+        # Periodic path (affine PBC). Forces are zero by default; rigid removal handled internally.
+        displacements, stresses, strains, von_mises = solve_static_problem_periodic(
+            nodes=nodes,
+            elements=elements,
+            voxel_size=voxel_size,
+            material_properties=material_properties,
+            periodic_cfg_in=periodic_cfg,
+        )
     else:
-        raise ValueError("Boundary conditions must be specified using the 'constraints' key. "
-                        "Please use the format: {'constraints': {Surface.MINUS_Z: 'fix', ...}}")
-    
-    # Solve the static problem
-    displacements, stresses, strains, von_mises = solve_static_problem(
-        nodes, elements, dofs, forces, material_properties
-    )
+        # Apply non-periodic boundary conditions (must be supplied in constraints format)
+        if boundary_conditions is None:
+            raise ValueError("Boundary conditions must be supplied. "
+                             "Please use the format: {'constraints': {Surface.MINUS_Z: 'fix', ...}} "
+                             "or provide {'periodic': {'enabled': True, ...}}")
+        
+        # Check if constraints are specified in the new format
+        if 'constraints' in boundary_conditions:
+            constraints = boundary_conditions.get('constraints', {})
+            dofs, forces = apply_boundary_conditions(nodes, elements, constraints)
+        else:
+            raise ValueError("Boundary conditions must be specified using the 'constraints' key. "
+                             "Please use the format: {'constraints': {Surface.MINUS_Z: 'fix', ...}} "
+                             "or provide {'periodic': {'enabled': True, ...}}")
+        
+        # Solve the static problem (standard path)
+        displacements, stresses, strains, von_mises = solve_static_problem(
+            nodes, elements, dofs, forces, material_properties
+        )
     
     # Prepare results dictionary
     results = {

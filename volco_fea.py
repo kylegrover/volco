@@ -24,37 +24,5 @@ Basic usage:
     )
 """
 
-# Re-export core FEA functionality
-from app.postprocessing.fea.core import analyze_voxel_matrix, load_fea_results
-from app.postprocessing.fea.viz import visualize_fea, export_visualization, visualize_voxel_matrix
-from app.postprocessing.fea.boundary import (
-    Surface,
-    select_nodes_by_predicate,
-    select_nodes_in_box,
-    select_nodes_on_plane,
-    select_nodes_by_position
-)
-from app.postprocessing.fea.io import save_results, load_results
-
-# Define what gets imported with "from volco_fea import *"
-__all__ = [
-    # Core functionality
-    'analyze_voxel_matrix',
-    'load_fea_results',
-    
-    # Visualization
-    'visualize_fea',
-    'export_visualization',
-    'visualize_voxel_matrix',
-    
-    # Boundary conditions
-    'Surface',
-    'select_nodes_by_predicate',
-    'select_nodes_in_box',
-    'select_nodes_on_plane',
-    'select_nodes_by_position',
-    
-    # I/O operations
-    'save_results',
-    'load_results'
-]
+# Re-export all FEA functionality from the main module (no duplication!)
+from app.postprocessing.fea import *
