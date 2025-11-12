@@ -53,3 +53,8 @@ class Simulation:
         # Default acceleration and STL settings
         self.consider_acceleration = config.get("consider_acceleration", False)
         self.stl_ascii = config.get("stl_ascii", False)
+        
+        # Thermal and physics simulation settings (new)
+        self.enable_thermal_simulation = config.get("enable_thermal_simulation", False)
+        self.enable_droop_simulation = config.get("enable_droop_simulation", False)
+        self.material_type = config.get("material_type", "PLA")  # PLA, ABS, or PETG

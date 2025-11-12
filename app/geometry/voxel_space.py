@@ -8,6 +8,7 @@ from app.geometry.sphere import Sphere
 from app.instructions.instruction import Instruction
 from app.geometry.geometry_math import GeometryMath
 from app.physics.volume import Volume
+from app.physics.material_state import HybridMaterialState
 
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,13 @@ class VoxelSpace:
         self._simulation = simulation_config
         self._printer = printer
         self._consider_acceleration = self._simulation.consider_acceleration
+        
+        # Initialize hybrid material state if thermal/droop simulation enabled
+        self._use_hybrid_simulation = (
+            self._simulation.enable_thermal_simulation or 
+            self._simulation.enable_droop_simulation
+        )
+        self._hybrid_state = None  # Will be initialized in print()
 
     def initialize_space(self):
         self.space = np.zeros(
@@ -57,6 +65,18 @@ class VoxelSpace:
         number_printed_layers = 0
 
         initial_z_coordinate = 0.0
+        
+        # Initialize hybrid state if physics simulation enabled
+        if self._use_hybrid_simulation:
+            self._hybrid_state = HybridMaterialState(
+                voxel_space=self,
+                simulation_config=self._simulation,
+                printer_config=self._printer,
+                material_type=self._simulation.material_type,
+                enable_thermal=self._simulation.enable_thermal_simulation,
+                enable_droop=self._simulation.enable_droop_simulation
+            )
+            logger.info("Hybrid material state initialized for physics simulation")
 
         print(self._instruction.filaments_coordinates)
 
@@ -103,6 +123,7 @@ class VoxelSpace:
                 direction_vector=direction_vector,
                 filament_initial_coordinates=initial_coordinate,
                 volumes=volumes,
+                printing_speed=printing_speed,
             )
 
     def _find_initial_and_final_filament_coordinates(self, filament_coordinates):
@@ -134,6 +155,7 @@ class VoxelSpace:
         direction_vector,
         filament_initial_coordinates,
         volumes,
+        printing_speed=50.0,
     ):
         total_deposited_volume = GeometryMath.calculate_filled_volume(
             self.space, self._simulation.voxel_size
@@ -174,20 +196,82 @@ class VoxelSpace:
             sphere_volume = volumes[step_n]
             volume_target = total_deposited_volume + sphere_volume
 
-            sphere = Sphere(
-                centre_coordinates=centre_coordinates,
-                voxel_size=self._simulation.voxel_size,
-            )
-
             logger.info(
                 f"Depositing filament: step = {step_n + 1}/{number_simulation_steps}"
             )
+            
+            # Use hybrid material state if physics simulation enabled
+            if self._use_hybrid_simulation and self._hybrid_state is not None:
+                # Calculate end point for this step
+                end_displacement = (step_n + 1) * step_size
+                end_point = [
+                    pi_i + dir_vec_i * end_displacement
+                    for (pi_i, dir_vec_i) in zip(
+                        filament_initial_coordinates, direction_vector
+                    )
+                ]
+                
+                # Create sphere depositor function for hybrid state
+                def sphere_depositor(center, volume):
+                    sphere = Sphere(
+                        centre_coordinates=center,
+                        voxel_size=self._simulation.voxel_size,
+                    )
+                    self.space = sphere.deposit_sphere(
+                        voxel_space=self.space,
+                        nozzle_height=nozzle_height,
+                        sphere_volume=volume,
+                        voxel_space_target_volume=volume_target,
+                        solver_tolerance=self._simulation.solver_tolerance,
+                        radius_increment=self._simulation.radius_increment,
+                    )
+                
+                # Deposit through hybrid state (applies physics)
+                self._hybrid_state.deposit_filament_segment(
+                    start=starting_point,
+                    end=end_point,
+                    volume=sphere_volume,
+                    step_number=step_n,
+                    printing_speed=printing_speed,
+                    sphere_depositor=sphere_depositor
+                )
+                
+                # Update total volume from actual voxel space
+                total_deposited_volume = GeometryMath.calculate_filled_volume(
+                    self.space, self._simulation.voxel_size
+                )
+            else:
+                # Original VolCo behavior (no physics simulation)
+                sphere = Sphere(
+                    centre_coordinates=centre_coordinates,
+                    voxel_size=self._simulation.voxel_size,
+                )
 
-            self.space = sphere.deposit_sphere(
-                voxel_space=self.space,
-                nozzle_height=nozzle_height,
-                sphere_volume=sphere_volume,
-                voxel_space_target_volume=volume_target,
-                solver_tolerance=self._simulation.solver_tolerance,
-                radius_increment=self._simulation.radius_increment,
-            )
+                self.space = sphere.deposit_sphere(
+                    voxel_space=self.space,
+                    nozzle_height=nozzle_height,
+                    sphere_volume=sphere_volume,
+                    voxel_space_target_volume=volume_target,
+                    solver_tolerance=self._simulation.solver_tolerance,
+                    radius_increment=self._simulation.radius_increment,
+                )
+    
+    def get_physics_simulation_data(self):
+        """
+        Get physics simulation data if hybrid state was used.
+        
+        Returns:
+        --------
+        dict or None
+            Dictionary with segment history and statistics, or None if not using physics simulation
+        """
+        if self._hybrid_state is None:
+            return None
+        
+        return {
+            'segments': self._hybrid_state.get_segment_history(),
+            'statistics': self._hybrid_state.get_statistics(),
+            'material_type': self._simulation.material_type,
+            'thermal_enabled': self._simulation.enable_thermal_simulation,
+            'droop_enabled': self._simulation.enable_droop_simulation,
+        }
