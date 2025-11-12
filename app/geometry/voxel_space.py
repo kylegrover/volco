@@ -212,14 +212,21 @@ class VoxelSpace:
                 ]
                 
                 # Create sphere depositor function for hybrid state
+                # IMPORTANT: Use volume_target from outer scope to match non-physics behavior
                 def sphere_depositor(center, volume):
+                    # Center comes from segment - this is at nozzle height
+                    # Need to apply sphere_z_offset to match non-physics behavior
+                    # BUT: nozzle_height should be BEFORE the offset
+                    actual_nozzle_height = center[2]
+                    adjusted_center = [center[0], center[1], center[2] - self._simulation.sphere_z_offset]
+                    
                     sphere = Sphere(
-                        centre_coordinates=center,
+                        centre_coordinates=adjusted_center,
                         voxel_size=self._simulation.voxel_size,
                     )
                     self.space = sphere.deposit_sphere(
                         voxel_space=self.space,
-                        nozzle_height=nozzle_height,
+                        nozzle_height=actual_nozzle_height,
                         sphere_volume=volume,
                         voxel_space_target_volume=volume_target,
                         solver_tolerance=self._simulation.solver_tolerance,
@@ -236,10 +243,9 @@ class VoxelSpace:
                     sphere_depositor=sphere_depositor
                 )
                 
-                # Update total volume from actual voxel space
-                total_deposited_volume = GeometryMath.calculate_filled_volume(
-                    self.space, self._simulation.voxel_size
-                )
+                # DON'T update total_deposited_volume inside loop - matches non-physics behavior
+                # Non-physics path uses ONE initial volume + accumulated sphere volumes
+                # total_deposited_volume stays constant throughout loop
             else:
                 # Original VolCo behavior (no physics simulation)
                 sphere = Sphere(

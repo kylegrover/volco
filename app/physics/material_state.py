@@ -264,6 +264,10 @@ class HybridMaterialState:
         
         # Deposit into voxel space
         center = segment.get_center_position()
+        
+        # Debug logging
+        logger.debug(f"Segment {segment.segment_id}: start={segment.start_pos}, end={segment.end_pos}, center={center}, droop={segment.droop_offset:.3f}mm")
+        
         sphere_depositor(center, volume)
         
         logger.debug(f"Deposited segment {segment.segment_id}: "

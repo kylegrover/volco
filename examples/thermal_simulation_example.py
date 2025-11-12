@@ -216,12 +216,18 @@ def example_3_combined_simulation():
     print("=" * 70)
     
     # Use existing G-code file if available
-    gcode_path = 'gcode_example.gcode'
-    if os.path.exists(gcode_path):
-        print(f"Using G-code from {gcode_path}")
-        with open(gcode_path, 'r') as f:
-            gcode_content = f.read()
-    else:
+    # Check both root directory and examples subdirectory
+    gcode_paths = ['gcode_example.gcode', 'examples/gcode_example.gcode']
+    gcode_content = None
+    
+    for gcode_path in gcode_paths:
+        if os.path.exists(gcode_path):
+            print(f"Using G-code from {gcode_path}")
+            with open(gcode_path, 'r') as f:
+                gcode_content = f.read()
+            break
+    
+    if gcode_content is None:
         # Fallback G-code
         print("Using generated G-code")
         gcode_content = """M83
