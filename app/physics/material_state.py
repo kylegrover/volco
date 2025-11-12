@@ -188,12 +188,18 @@ class HybridMaterialState:
         self.segment_history = []  # All segments (for analysis)
         self.current_time = 0.0  # Simulation time in seconds
         
+        # Strand tracking - NEW: track continuous unsupported spans
+        self.current_strand = []  # Current continuous unsupported strand
+        self.last_anchor_point = None  # Last supported/solidified position
+        self.strand_start_time = 0.0  # When current strand started
+        
         # Statistics
         self.stats = {
             'total_segments': 0,
             'solidified_segments': 0,
             'drooped_segments': 0,
             'unsupported_segments': 0,
+            'max_strand_length': 0.0,
         }
         
         logger.info(f"HybridMaterialState initialized: material={material_type}, "
@@ -239,20 +245,21 @@ class HybridMaterialState:
         )
         segment.segment_id = self.stats['total_segments']
         
-        # Check for support immediately
+        # Update active segments first (cooling, solidification)
+        if self.enable_thermal or self.enable_droop:
+            self._update_active_segments(self.current_time)
+        
+        # Check for support
         if self.enable_droop:
             segment.support_below = self._check_support(segment)
             if not segment.support_below:
                 self.stats['unsupported_segments'] += 1
         
-        # Update active segments (cooling, droop)
-        if self.enable_thermal or self.enable_droop:
-            self._update_active_segments(self.current_time)
+        # NEW: Strand-based physics simulation
+        if self.enable_droop:
+            self._update_strand_physics(segment)
         
-        # Apply physics to current segment
-        if self.enable_droop and not segment.support_below:
-            self._apply_droop_physics(segment)
-        
+        # Thermal updates for this segment
         if self.enable_thermal:
             segment.update_temperature(self.current_time, self.cooling_model)
             self._check_fusion(segment)
@@ -353,6 +360,127 @@ class HybridMaterialState:
         if droop > 0.1:  # More than 0.1mm
             self.stats['drooped_segments'] += 1
     
+    def _update_strand_physics(self, segment):
+        """
+        NEW: Strand-based physics simulation.
+        
+        Tracks continuous unsupported strands and applies physics to the entire
+        span from the last anchor point (supported/solidified) to current nozzle.
+        
+        Parameters:
+        -----------
+        segment : FilamentSegment
+            Newly deposited segment
+        """
+        # Determine if this segment is an anchor point
+        is_anchor = False
+        
+        if segment.support_below:
+            is_anchor = True
+        elif self.enable_thermal and segment.is_solidified:
+            is_anchor = True
+        
+        if is_anchor:
+            # This segment is supported or solidified - it becomes an anchor
+            if len(self.current_strand) > 0:
+                # Apply physics to the completed strand before clearing
+                self._apply_strand_droop(self.current_strand)
+                
+                # Calculate total strand length for stats
+                total_length = sum(s.length for s in self.current_strand)
+                self.stats['max_strand_length'] = max(
+                    self.stats['max_strand_length'], 
+                    total_length
+                )
+                
+                logger.debug(f"Strand completed: {len(self.current_strand)} segments, "
+                           f"{total_length:.2f}mm total length")
+                
+                # Clear strand
+                self.current_strand = []
+            
+            # Set new anchor point
+            self.last_anchor_point = segment.end_pos.copy()
+            self.strand_start_time = self.current_time
+            
+        else:
+            # Unsupported segment - add to current strand
+            self.current_strand.append(segment)
+            
+            # Calculate unsupported length from last anchor
+            if self.last_anchor_point is not None:
+                # Distance from anchor to current segment end
+                strand_length = np.linalg.norm(segment.end_pos - self.last_anchor_point)
+            else:
+                # No previous anchor (shouldn't happen, but handle gracefully)
+                strand_length = segment.length
+                self.last_anchor_point = segment.start_pos.copy()
+            
+            segment.unsupported_length = strand_length
+            
+            # Apply droop physics to entire current strand
+            if len(self.current_strand) > 0:
+                self._apply_strand_droop(self.current_strand)
+    
+    def _apply_strand_droop(self, strand_segments):
+        """
+        Apply droop physics to a continuous strand of segments.
+        
+        Parameters:
+        -----------
+        strand_segments : list[FilamentSegment]
+            List of connected unsupported segments forming a strand
+        """
+        if not strand_segments:
+            return
+        
+        # Calculate total strand properties
+        total_length = sum(s.length for s in strand_segments)
+        if total_length == 0:
+            return
+        
+        # Use the most recent (hottest) segment's temperature for viscosity
+        # In reality, we'd model temperature gradient along the strand
+        latest_segment = strand_segments[-1]
+        viscosity = self.material_props.get_viscosity(latest_segment.temperature)
+        
+        # Time since strand started forming
+        time_elapsed = self.current_time - self.strand_start_time
+        
+        # Calculate maximum droop at the midpoint of the strand
+        # (catenary has maximum sag at center)
+        max_droop = self.gravity_model.calculate_droop(
+            unsupported_length=total_length,
+            viscosity=viscosity,
+            time_elapsed=time_elapsed,
+            filament_diameter=latest_segment.width
+        )
+        
+        # Apply droop distribution along strand
+        # Simple model: parabolic distribution with max at center
+        cumulative_length = 0.0
+        for i, segment in enumerate(strand_segments):
+            cumulative_length += segment.length
+            
+            # Position along strand (0 to 1)
+            position_ratio = cumulative_length / total_length
+            
+            # Parabolic droop profile: max at center (0.5)
+            # droop_factor peaks at 1.0 when position_ratio = 0.5
+            droop_factor = 1.0 - 4.0 * (position_ratio - 0.5) ** 2
+            droop_factor = max(0.0, droop_factor)  # Clamp to non-negative
+            
+            # Apply proportional droop
+            segment_droop = max_droop * droop_factor
+            segment.apply_droop(segment_droop)
+            segment.unsupported_length = total_length  # Update to reflect full strand
+            
+            if segment_droop > 0.1:
+                self.stats['drooped_segments'] += 1
+        
+        logger.debug(f"Applied strand droop: length={total_length:.2f}mm, "
+                   f"max_droop={max_droop:.3f}mm, segments={len(strand_segments)}")
+    
     def _check_fusion(self, segment):
         """
         Check if segment can fuse with material below it.
@@ -391,14 +519,19 @@ class HybridMaterialState:
             if self.enable_thermal:
                 segment.update_temperature(current_time, self.cooling_model)
             
-            # Update droop (material gets more viscous as it cools)
-            if self.enable_droop and not segment.support_below:
-                self._apply_droop_physics(segment)
-            
-            # Check if solidified
-            if segment.is_solidified:
+            # Check if solidified (below glass transition temp)
+            if (self.enable_thermal and 
+                segment.temperature < self.material_props.glass_transition and
+                not segment.is_solidified):
+                segment.is_solidified = True
                 segments_to_remove.append(segment)
                 self.stats['solidified_segments'] += 1
+                
+                # If this segment is in current strand, it becomes an anchor
+                if segment in self.current_strand:
+                    logger.debug(f"Segment {segment.segment_id} solidified in strand, "
+                               f"becoming anchor at {segment.end_pos}")
+                    # Note: The next deposited segment will trigger strand completion
         
         # Remove solidified segments from active list
         for segment in segments_to_remove:

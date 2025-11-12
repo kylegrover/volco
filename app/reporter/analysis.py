@@ -249,8 +249,13 @@ class PrintAnalysis:
             f"  Solidified segments: {stats['solidified_segments']}",
             f"  Active (hot) segments: {stats['active_segments']}",
             f"  Simulation time: {stats['total_time']:.2f}s",
-            "",
         ])
+        
+        # Add strand tracking stats if available
+        if 'max_strand_length' in stats:
+            lines.append(f"  Maximum continuous strand: {stats['max_strand_length']:.2f} mm")
+        
+        lines.append("")
         
         # Add droop analysis
         droop_stats = analysis_report['droop_analysis']['droop_stats']

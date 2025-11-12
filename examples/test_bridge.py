@@ -109,23 +109,20 @@ if physics_data:
     analyzer.export_detailed_csv(physics_data['segments'], csv_path)
     print(f"Detailed segment data: {csv_path}")
     
-    # Show bridge details
-    bridges = analysis['bridges']
-    if bridges:
+    # Show bridge details from droop analysis
+    bridge_stats = analysis.get('droop_analysis', {}).get('bridge_stats', {})
+    if bridge_stats.get('total_bridges', 0) > 0:
         print(f"\n{'='*70}")
         print("BRIDGE DETAILS")
         print(f"{'='*70}")
-        print(f"Total bridges found: {len(bridges)}")
-        print(f"Longest bridge: {analysis['max_bridge_length']:.2f} mm")
+        print(f"Total bridges found: {bridge_stats['total_bridges']}")
+        print(f"Longest bridge: {bridge_stats['longest_bridge']:.2f} mm")
+        print(f"Average bridge length: {bridge_stats['avg_bridge_length']:.2f} mm")
         
-        # Find the longest bridge
-        longest = max(bridges, key=lambda b: b['length'])
-        print(f"\nLongest bridge segment #{longest['segment_id']}:")
-        print(f"  Position: ({longest['start_pos'][0]:.1f}, {longest['start_pos'][1]:.1f}, {longest['start_pos'][2]:.2f})")
-        print(f"           → ({longest['end_pos'][0]:.1f}, {longest['end_pos'][1]:.1f}, {longest['end_pos'][2]:.2f})")
-        print(f"  Length: {longest['length']:.2f} mm")
-        print(f"  Droop: {longest['droop']:.3f} mm")
-        print(f"  Temperature: {longest['temperature']:.1f}°C")
+        # Show max strand length from stats
+        stats = analysis.get('statistics', {})
+        if 'max_strand_length' in stats:
+            print(f"\nMaximum continuous unsupported strand: {stats['max_strand_length']:.2f} mm")
 
 # Compare file sizes
 baseline_size = os.path.getsize(stl_baseline)
