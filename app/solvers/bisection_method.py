@@ -23,35 +23,42 @@ class BisectionMethod:
         else:
             point_b = initial_point
 
-        _, _, point_a, point_b = self._loop_fb(fun, point_b, increment, args)
+        fb, out, point_a, point_b, updated_args = self._loop_fb(fun, point_b, increment, args)
 
-        return self._loop_fc(
-            fun, point_a, point_b, tolerance, fun_increase_tolerance, args
+        # _loop_fc returns (fc, out) where out may be the raw output from `fun`.
+        fc, out = self._loop_fc(
+            fun, point_a, point_b, tolerance, fun_increase_tolerance, updated_args
         )
+
+        # If `out` is a tuple like (volume_overshoot, voxel_space), unwrap it
+        if isinstance(out, tuple) and len(out) == 2:
+            return fc, out[1]
+
+        return fc, out
 
     def _loop_fb(self, fun, point_b, inc, args):
         fb = -1.0
-
         point_a = 0.0
-
+        updated_args = list(args)
         while fb < 0.0:
-
-            fb, out = fun(point_b, *args)
-
+            fb, out = fun(point_b, *updated_args)
+            # If the function returns an updated voxel_space as the second value,
+            # `out` will be that ndarray (it will have a `shape` attribute).
+            if hasattr(out, "shape"):
+                updated_args[0] = out
             if fb < 0:
                 point_a = point_b
                 point_b += inc
-
-        return fb, out, point_a, point_b
+        return fb, out, point_a, point_b, updated_args
 
     def _loop_fc(self, fun, point_a, point_b, tolerance, fun_increase_tolerance, args):
         fc = 2.0 * tolerance
-
+        updated_args = list(args)
         while abs(fc) > tolerance:
             point_c = (point_a + point_b) * 0.5
-
-            fc, out = fun(point_c, *args)
-
+            fc, out = fun(point_c, *updated_args)
+            if hasattr(out, "shape"):
+                updated_args[0] = out
             if fun_increase_tolerance(point_a, point_b):
                 logger.debug(
                     "[BisectionMethod]: increasing tolerance because point_b and point_a are too close"

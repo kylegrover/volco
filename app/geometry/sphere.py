@@ -111,11 +111,12 @@ class Sphere:
             return voxel_space
 
         number_to_be_added = max_index - index_size + 1
+        import logging
+        logging.info(f"Expanding voxel space on axis {axis_number}: current size {index_size}, required {max_index}, adding {number_to_be_added}")
 
-        new_size = list(size)
-        new_size[axis_number] = number_to_be_added
-
-        mat_add = np.zeros(new_size, dtype=np.int8)
+        mat_add_size = list(size)
+        mat_add_size[axis_number] = number_to_be_added
+        mat_add = np.zeros(mat_add_size, dtype=np.int8)
 
         voxel_space = np.concatenate((voxel_space, mat_add), axis=axis_number)
 
