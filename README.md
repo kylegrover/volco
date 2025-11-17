@@ -116,6 +116,10 @@ if __name__ == "__main__":
     process_gcode('examples/gcode_example.gcode')
 ```
 
+### Using VolcoGUI
+
+[VolcoGUI](https://github.com/kylegrover/volcogui) is a community created open source GUI for Volco. It's a standalone application that includes all dependencies and provides a built in STL viewer.
+
 ## Configuration Parameters
 
 VOLCO uses two configuration files: simulation settings and printer settings. Below is an explanation of each parameter and its recommended default value.
