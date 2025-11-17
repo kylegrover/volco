@@ -47,8 +47,46 @@ class VoxelSpace:
         self._consider_acceleration = self._simulation.consider_acceleration
 
     def initialize_space(self):
+        # Try to intelligently preallocate Z dimension to avoid repeated expansions.
+        # Estimate the maximum per-step sphere radius from filaments and add a safety margin.
+        z_dim = self.dimensions["z"]
+
+        try:
+            max_radius = 0.0
+            step_size = self._simulation.step_size
+            for filament in self._instruction.filaments_coordinates:
+                coord_old = filament[0]
+                coord_new = filament[1]
+                volume = filament[2]
+
+                # compute filament length and estimated number of steps
+                length = GeometryMath.distance(coord_old, coord_new)
+                n_steps = int(round(length / step_size))
+                if n_steps < 1:
+                    n_steps = 1
+
+                per_step_volume = volume / n_steps
+                # estimate radius of sphere that would contain this volume
+                radius = (3.0 * per_step_volume / (4.0 * math.pi)) ** (1.0 / 3.0)
+                if radius > max_radius:
+                    max_radius = radius
+
+            # include configured sphere z offset
+            max_extra_z = int(math.ceil((max_radius + self._simulation.sphere_z_offset) / self._simulation.voxel_size))
+
+            # safety margin (20% of current z) to reduce chance of further expansion
+            safety_margin = int(max(1, z_dim * 0.2))
+
+            if max_extra_z > 0:
+                z_dim = z_dim + max_extra_z + safety_margin
+
+            logging.getLogger(__name__).info(f"Preallocating voxel space z-dimension: base={self.dimensions['z']}, extra={max_extra_z}, safety={safety_margin}, final={z_dim}")
+        except Exception:
+            # Fallback to original allocation if any issue occurs during estimation
+            z_dim = self.dimensions["z"]
+
         self.space = np.zeros(
-            (self.dimensions["x"], self.dimensions["y"], self.dimensions["z"]),
+            (self.dimensions["x"], self.dimensions["y"], z_dim),
             dtype=np.int8,
         )
 

@@ -112,10 +112,15 @@ class Sphere:
 
         number_to_be_added = max_index - index_size + 1
         import logging
-        logging.info(f"Expanding voxel space on axis {axis_number}: current size {index_size}, required {max_index}, adding {number_to_be_added}")
 
+        # Add a buffer to reduce the number of reallocations. Buffer is 20%
+        # of current size (rounded), but at least the minimum required.
+        buffer_layers = max(int(index_size * 0.2), 1)
+        layers_to_add = max(number_to_be_added, buffer_layers)
+
+        # Create only the additional block to concatenate
         mat_add_size = list(size)
-        mat_add_size[axis_number] = number_to_be_added
+        mat_add_size[axis_number] = layers_to_add
         mat_add = np.zeros(mat_add_size, dtype=np.int8)
 
         voxel_space = np.concatenate((voxel_space, mat_add), axis=axis_number)
