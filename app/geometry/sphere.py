@@ -116,25 +116,24 @@ class Sphere:
         return voxel_space
 
     def _deposit_sphere(self, radius, voxel_space, nozzle_height, target_volume):
-        copy_voxel_space = voxel_space.copy()
-
-        copy_voxel_space = self.deform_voxel_space_for_big_spheres(
-            copy_voxel_space, radius
+        # Modify voxel_space in-place to avoid redundant copying
+        voxel_space = self.deform_voxel_space_for_big_spheres(
+            voxel_space, radius
         )
 
         lower_indexes, upper_indexes = self.find_sphere_limits(radius, nozzle_height)
 
-        copy_voxel_space = self.fill_voxels(
-            copy_voxel_space, radius, lower_indexes, upper_indexes
+        voxel_space = self.fill_voxels(
+            voxel_space, radius, lower_indexes, upper_indexes
         )
 
         current_volume = GeometryMath.calculate_filled_volume(
-            copy_voxel_space, self.voxel_size
+            voxel_space, self.voxel_size
         )
 
         volume_overshoot = current_volume / target_volume - 1.0
 
-        return volume_overshoot, copy_voxel_space
+        return volume_overshoot, voxel_space
 
     def _increase_solver_tolerance(self, radius_a, radius_b):
         return radius_b - radius_a < self.voxel_size * 0.5
