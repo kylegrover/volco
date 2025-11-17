@@ -41,6 +41,9 @@ class Sphere:
             voxel_space, lower_indexes, upper_indexes
         )
 
+        if not empty_voxels:
+            return voxel_space
+
         # Convert to numpy array for vectorized operations
         empty_voxels_np = np.array(empty_voxels)
         # Calculate coordinates for all voxels at once
