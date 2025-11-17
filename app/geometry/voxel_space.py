@@ -68,6 +68,7 @@ class VoxelSpace:
         
         # Initialize hybrid state if physics simulation enabled
         if self._use_hybrid_simulation:
+            print(f"\n[DEBUG] Initializing HybridMaterialState: thermal={self._simulation.enable_thermal_simulation}, droop={self._simulation.enable_droop_simulation}")
             self._hybrid_state = HybridMaterialState(
                 voxel_space=self,
                 simulation_config=self._simulation,
@@ -77,10 +78,18 @@ class VoxelSpace:
                 enable_droop=self._simulation.enable_droop_simulation
             )
             logger.info("Hybrid material state initialized for physics simulation")
+        else:
+            print(f"\n[DEBUG] NOT using hybrid simulation: thermal={self._simulation.enable_thermal_simulation}, droop={self._simulation.enable_droop_simulation}")
 
         print(self._instruction.filaments_coordinates)
 
-        for filament_coordinates in self._instruction.filaments_coordinates:
+        for fil_idx, filament_coordinates in enumerate(self._instruction.filaments_coordinates):
+            # DEBUG: Log raw filament coordinates for bridge
+            if fil_idx == 10:
+                print(f"\n[DEBUG RAW FILAMENT {fil_idx}] filament_coordinates[0]: {filament_coordinates[0]}")
+                print(f"[DEBUG RAW FILAMENT {fil_idx}] filament_coordinates[1]: {filament_coordinates[1]}")
+                print(f"[DEBUG RAW FILAMENT {fil_idx}] filament_translations: {self.filament_translations}")
+            
             (
                 initial_coordinate,
                 final_coordinate,
@@ -107,6 +116,20 @@ class VoxelSpace:
             number_simulation_steps, step_size = self._find_simulation_step_info(
                 filament_length
             )
+            
+            # Log bridge filament and segment count
+            if fil_idx >= 340 and fil_idx <= 343:
+                logger.info(f"Processing filament {fil_idx}: start=({initial_coordinate[0]:.2f},{initial_coordinate[1]:.2f},{initial_coordinate[2]:.2f}) end=({final_coordinate[0]:.2f},{final_coordinate[1]:.2f},{final_coordinate[2]:.2f}) vol={volume:.6f}")
+                if self._hybrid_state:
+                    logger.info(f"  Segments in history BEFORE processing: {len(self._hybrid_state.segment_history)}")
+            
+            # DEBUG: Log bridge filament coordinates (fil 10 is the 40mm bridge - 11th filament, 0-indexed)
+            if fil_idx == 10:
+                print(f"\n[DEBUG FILAMENT {fil_idx}] initial_coordinate: {initial_coordinate}")
+                print(f"[DEBUG FILAMENT {fil_idx}] final_coordinate: {final_coordinate}")
+                print(f"[DEBUG FILAMENT {fil_idx}] filament_length: {filament_length:.2f}mm")
+                print(f"[DEBUG FILAMENT {fil_idx}] number_simulation_steps: {number_simulation_steps}")
+                print(f"[DEBUG FILAMENT {fil_idx}] step_size: {step_size:.4f}mm\n")
 
             volumes = Volume.get_volumes_for_filament(
                 number_simulation_steps=number_simulation_steps,
@@ -125,6 +148,11 @@ class VoxelSpace:
                 volumes=volumes,
                 printing_speed=printing_speed,
             )
+            
+            # Log segment count after processing bridge
+            if fil_idx >= 340 and fil_idx <= 343:
+                if self._hybrid_state:
+                    logger.info(f"  Segments in history AFTER processing: {len(self._hybrid_state.segment_history)}")
 
     def _find_initial_and_final_filament_coordinates(self, filament_coordinates):
         initial = [
@@ -232,6 +260,12 @@ class VoxelSpace:
                         solver_tolerance=self._simulation.solver_tolerance,
                         radius_increment=self._simulation.radius_increment,
                     )
+                
+                # DEBUG: Log coordinates for bridge segments (Z ≈ 2.2)
+                if abs(starting_point[2] - 2.2) < 0.01 and step_n == 100:
+                    print(f"\n[DEBUG SEGMENT] step={step_n}")
+                    print(f"[DEBUG SEGMENT] starting_point: {starting_point}")
+                    print(f"[DEBUG SEGMENT] end_point: {end_point}\n")
                 
                 # Deposit through hybrid state (applies physics)
                 self._hybrid_state.deposit_filament_segment(
