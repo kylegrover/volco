@@ -49,6 +49,21 @@ class GeometryMath:
 
     @staticmethod
     def calculate_filled_volume(voxel_space, voxel_size):
+        # Accept either a raw ndarray or a VoxelSpace-like object with a
+        # `_filled_voxels_count` running counter. Prefer the running counter
+        # when available to avoid expensive full-array scans.
+        if hasattr(voxel_space, "_filled_voxels_count"):
+            return int(voxel_space._filled_voxels_count) * voxel_size ** 3
+
+        # If an object with `.space` is provided, try to use its counter first.
+        if hasattr(voxel_space, "space") and hasattr(voxel_space.space, "shape"):
+            # If the container itself tracks a counter, use it.
+            if hasattr(voxel_space, "_filled_voxels_count"):
+                return int(voxel_space._filled_voxels_count) * voxel_size ** 3
+            # Fallback to scanning the ndarray
+            return np.count_nonzero(voxel_space.space) * voxel_size ** 3
+
+        # Otherwise assume voxel_space is a numpy array
         return np.count_nonzero(voxel_space) * voxel_size**3
 
     def find_index(coordinate, voxel_size):

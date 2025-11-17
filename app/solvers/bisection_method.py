@@ -42,9 +42,10 @@ class BisectionMethod:
         updated_args = list(args)
         while fb < 0.0:
             fb, out = fun(point_b, *updated_args)
-            # If the function returns an updated voxel_space as the second value,
-            # `out` will be that ndarray (it will have a `shape` attribute).
-            if hasattr(out, "shape"):
+            # If the function returns an updated voxel_space, propagate it.
+            # The returned `out` may be an ndarray (has `shape`) or a
+            # VoxelSpace-like object with a `space` attribute. Accept both.
+            if hasattr(out, "shape") or hasattr(out, "space"):
                 updated_args[0] = out
             if fb < 0:
                 point_a = point_b
@@ -57,7 +58,7 @@ class BisectionMethod:
         while abs(fc) > tolerance:
             point_c = (point_a + point_b) * 0.5
             fc, out = fun(point_c, *updated_args)
-            if hasattr(out, "shape"):
+            if hasattr(out, "shape") or hasattr(out, "space"):
                 updated_args[0] = out
             if fun_increase_tolerance(point_a, point_b):
                 logger.debug(

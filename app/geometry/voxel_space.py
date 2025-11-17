@@ -45,6 +45,8 @@ class VoxelSpace:
         self._simulation = simulation_config
         self._printer = printer
         self._consider_acceleration = self._simulation.consider_acceleration
+        # Running count of filled voxels (to avoid repeated `np.count_nonzero` calls)
+        self._filled_voxels_count = 0
 
     def initialize_space(self):
         # Try to intelligently preallocate Z dimension to avoid repeated expansions.
@@ -89,6 +91,8 @@ class VoxelSpace:
             (self.dimensions["x"], self.dimensions["y"], z_dim),
             dtype=np.int8,
         )
+        # reset the running counter when allocating space
+        self._filled_voxels_count = 0
 
     def print(self):
         number_printed_filaments = 0
@@ -173,8 +177,9 @@ class VoxelSpace:
         filament_initial_coordinates,
         volumes,
     ):
-        total_deposited_volume = GeometryMath.calculate_filled_volume(
-            self.space, self._simulation.voxel_size
+        # Use the running counter to compute total deposited volume quickly
+        total_deposited_volume = (
+            self._filled_voxels_count * self._simulation.voxel_size ** 3
         )
 
         for step_n in range(0, number_simulation_steps):
@@ -221,11 +226,20 @@ class VoxelSpace:
                 f"Depositing filament: step = {step_n + 1}/{number_simulation_steps}"
             )
 
-            self.space = sphere.deposit_sphere(
-                voxel_space=self.space,
+            # Pass the VoxelSpace instance so sphere code can update the
+            # running counter and expand the `.space` ndarray in-place.
+            voxel_space_out = sphere.deposit_sphere(
+                voxel_space=self,
                 nozzle_height=nozzle_height,
                 sphere_volume=sphere_volume,
                 voxel_space_target_volume=volume_target,
                 solver_tolerance=self._simulation.solver_tolerance,
                 radius_increment=self._simulation.radius_increment,
             )
+
+            # Ensure our internal `.space` and counter reflect any mutations
+            # returned by the sphere logic (voxel_space_out is a VoxelSpace)
+            if hasattr(voxel_space_out, "space"):
+                self.space = voxel_space_out.space
+            if hasattr(voxel_space_out, "_filled_voxels_count"):
+                self._filled_voxels_count = voxel_space_out._filled_voxels_count
