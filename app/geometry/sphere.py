@@ -40,9 +40,12 @@ class Sphere:
         return voxel_space_out
 
     def fill_voxels(self, voxel_space_obj, radius, lower_indexes, upper_indexes):
-        # `voxel_space_obj` is a VoxelSpace instance. Operate on its `.space` ndarray
+        # Accept either a VoxelSpace-like object (has `.space`) or a raw ndarray.
+        is_voxel_space = hasattr(voxel_space_obj, "space")
+        space = voxel_space_obj.space if is_voxel_space else voxel_space_obj
+
         empty_voxels = GeometryMath.find_empty_voxels_in_space(
-            voxel_space_obj.space, lower_indexes, upper_indexes
+            space, lower_indexes, upper_indexes
         )
 
         if not empty_voxels:
@@ -70,18 +73,20 @@ class Sphere:
         zk = fill_indices[:, 2].astype(int)
 
         # Before setting, count how many of these are actually zero (defensive)
-        # They should be zero because `find_empty_voxels_in_space` returned empties,
-        # but reconfirm to be robust in case of race or prior modifications.
-        current_vals = voxel_space_obj.space[xi, yj, zk]
+        current_vals = space[xi, yj, zk]
         new_mask = current_vals == 0
         n_new = int(np.count_nonzero(new_mask))
         if n_new > 0:
-            voxel_space_obj.space[xi[new_mask], yj[new_mask], zk[new_mask]] = 1
-            # Update running counter on the VoxelSpace object
-            if hasattr(voxel_space_obj, "_filled_voxels_count"):
+            # Assign into the ndarray `space` (in-place)
+            space[xi[new_mask], yj[new_mask], zk[new_mask]] = 1
+            # Update running counter only when we were given a VoxelSpace object
+            if is_voxel_space and hasattr(voxel_space_obj, "_filled_voxels_count"):
                 voxel_space_obj._filled_voxels_count += n_new
 
-        return voxel_space_obj
+        # Return the same type we were given
+        if is_voxel_space:
+            return voxel_space_obj
+        return space
 
     def estimate_initial_radius(self, volume):
         return (3.0 * volume / (4.0 * math.pi)) ** (1.0 / 3.0)
@@ -115,22 +120,23 @@ class Sphere:
     """
 
     def deform_voxel_space_for_big_spheres(self, voxel_space, radius):
-        # voxel_space is expected to be a VoxelSpace instance; check and operate on its `.space`
+        # Accept either a VoxelSpace object or a raw ndarray and return the same type.
         max_indexes = [
             self._find_index(coord + radius) for coord in self.centre_coordinates
         ]
 
+        vs = voxel_space
         for axis_number in range(0, 3):
-            voxel_space = self._maybe_expand_voxel_space(
-                voxel_space, max_indexes[axis_number], axis_number
-            )
+            vs = self._maybe_expand_voxel_space(vs, max_indexes[axis_number], axis_number)
 
-        return voxel_space
+        return vs
 
     def _maybe_expand_voxel_space(self, voxel_space_obj, max_index, axis_number):
-        # Operate on `voxel_space_obj.space` and update in-place by reassigning.
-        size = voxel_space_obj.space.shape
+        # Accept either a VoxelSpace-like object (has `.space`) or a raw ndarray.
+        is_voxel_space = hasattr(voxel_space_obj, "space")
+        space = voxel_space_obj.space if is_voxel_space else voxel_space_obj
 
+        size = space.shape
         index_size = size[axis_number]
 
         if max_index < index_size:
@@ -148,24 +154,28 @@ class Sphere:
         mat_add_size[axis_number] = layers_to_add
         mat_add = np.zeros(mat_add_size, dtype=np.int8)
 
-        voxel_space_obj.space = np.concatenate((voxel_space_obj.space, mat_add), axis=axis_number)
+        new_space = np.concatenate((space, mat_add), axis=axis_number)
 
-        return voxel_space_obj
+        if is_voxel_space:
+            voxel_space_obj.space = new_space
+            return voxel_space_obj
+
+        return new_space
 
     def _deposit_sphere(self, radius, voxel_space, nozzle_height, target_volume):
-        # `voxel_space` is a VoxelSpace instance; deform and fill it in-place.
-        voxel_space = self.deform_voxel_space_for_big_spheres(voxel_space, radius)
+        # Accept and return either a VoxelSpace object or a raw ndarray.
+        vs = self.deform_voxel_space_for_big_spheres(voxel_space, radius)
 
         lower_indexes, upper_indexes = self.find_sphere_limits(radius, nozzle_height)
 
-        voxel_space = self.fill_voxels(voxel_space, radius, lower_indexes, upper_indexes)
+        vs = self.fill_voxels(vs, radius, lower_indexes, upper_indexes)
 
-        current_volume = GeometryMath.calculate_filled_volume(voxel_space, self.voxel_size)
+        current_volume = GeometryMath.calculate_filled_volume(vs, self.voxel_size)
 
         volume_overshoot = current_volume / target_volume - 1.0
 
-        # Return the computed overshoot and the (possibly mutated) VoxelSpace object
-        return volume_overshoot, voxel_space
+        # Return the computed overshoot and the (possibly mutated) voxel container
+        return volume_overshoot, vs
 
     def _increase_solver_tolerance(self, radius_a, radius_b):
         return radius_b - radius_a < self.voxel_size * 0.5
