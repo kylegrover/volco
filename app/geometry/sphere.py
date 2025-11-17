@@ -41,15 +41,18 @@ class Sphere:
             voxel_space, lower_indexes, upper_indexes
         )
 
-        for voxel in empty_voxels:
-            voxel_coordinate = GeometryMath.find_coordinates(voxel, self.voxel_size)
-
-            distance_to_centre = GeometryMath.distance(
-                voxel_coordinate, self.centre_coordinates
-            )
-
-            if distance_to_centre <= radius + self.voxel_size * 1e-8:
-                voxel_space[tuple(voxel)] = 1
+        # Convert to numpy array for vectorized operations
+        empty_voxels_np = np.array(empty_voxels)
+        # Calculate coordinates for all voxels at once
+        voxel_coords = self.voxel_size * (2 * (empty_voxels_np + 1) - 1) * 0.5
+        # Calculate squared distances to centre for all voxels
+        centre = np.array(self.centre_coordinates)
+        dists = np.linalg.norm(voxel_coords - centre, axis=1)
+        # Mask for voxels within radius
+        mask = dists <= radius + self.voxel_size * 1e-8
+        # Assign value 1 to all selected voxels
+        for idx in empty_voxels_np[mask]:
+            voxel_space[tuple(idx)] = 1
 
         return voxel_space
 
