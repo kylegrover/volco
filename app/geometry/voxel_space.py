@@ -146,13 +146,12 @@ class VoxelSpace:
         """
         nozzle_radius = self._printer.nozzle_diameter / 2.0
         voxel_size = self._simulation.voxel_size
+        # Use the same logic as the default mode: fill capsule for every filament segment
         for filament_coordinates in self._instruction.filaments_coordinates:
             initial, final = self._find_initial_and_final_filament_coordinates(filament_coordinates)
-            extrusion_start = filament_coordinates[0][3]
-            extrusion_end = filament_coordinates[1][3]
-            # Only deposit if extrusion is positive (extruder is on)
-            if extrusion_end > extrusion_start:
-                # Get bounding box for the capsule
+            # Only fill if the segment has positive volume
+            volume = filament_coordinates[2]
+            if volume > 0:
                 min_x = min(initial[0], final[0]) - nozzle_radius
                 max_x = max(initial[0], final[0]) + nozzle_radius
                 min_y = min(initial[1], final[1]) - nozzle_radius
@@ -165,29 +164,27 @@ class VoxelSpace:
                 j_max = min(self.space.shape[1] - 1, int(max_y / voxel_size))
                 k_min = max(0, int(min_z / voxel_size))
                 k_max = min(self.space.shape[2] - 1, int(max_z / voxel_size))
-                # Capsule math: for each voxel, check if its center is within the capsule
+                # Vectorized capsule SDF fill
                 p1 = np.array(initial)
                 p2 = np.array(final)
-                seg = p2 - p1
-                seg_len2 = np.dot(seg, seg)
-                for i in range(i_min, i_max + 1):
-                    for j in range(j_min, j_max + 1):
-                        for k in range(k_min, k_max + 1):
-                            voxel_center = np.array([
-                                (i + 0.5) * voxel_size,
-                                (j + 0.5) * voxel_size,
-                                (k + 0.5) * voxel_size
-                            ])
-                            # Project voxel_center onto segment
-                            if seg_len2 > 0:
-                                t = np.dot(voxel_center - p1, seg) / seg_len2
-                                t = max(0, min(1, t))
-                                closest = p1 + t * seg
-                            else:
-                                closest = p1
-                            dist2 = np.sum((voxel_center - closest) ** 2)
-                            if dist2 <= nozzle_radius ** 2:
-                                self.space[i, j, k] = 1
+                ba = p2 - p1
+                ba_dot_ba = np.dot(ba, ba) if np.dot(ba, ba) > 0 else 1e-8
+                ii, jj, kk = np.meshgrid(
+                    np.arange(i_min, i_max + 1),
+                    np.arange(j_min, j_max + 1),
+                    np.arange(k_min, k_max + 1),
+                    indexing='ij'
+                )
+                voxel_centers = np.stack([
+                    (ii + 0.5) * voxel_size,
+                    (jj + 0.5) * voxel_size,
+                    (kk + 0.5) * voxel_size
+                ], axis=-1)
+                pa = voxel_centers - p1
+                h = np.clip(np.sum(pa * ba, axis=-1) / ba_dot_ba, 0.0, 1.0)
+                capsule_sdf = np.sqrt(np.sum((pa - ba * h[..., None]) ** 2, axis=-1)) - nozzle_radius
+                inside = capsule_sdf <= 0
+                self.space[ii[inside], jj[inside], kk[inside]] = 1
 
     def _find_initial_and_final_filament_coordinates(self, filament_coordinates):
         initial = [
