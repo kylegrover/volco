@@ -274,11 +274,10 @@ def export_voxel_stl_streaming_binary(voxel_space, voxel_size, file_path):
             indices = np.array(np.where(mask)).T
             
             if indices.size == 0:
-                logger.info(f"[Profile]: Face {face_idx}/6 - No visible faces")
                 continue
             
             N = indices.shape[0]
-            chunk_size = 50000  # Process 50k voxels at a time
+            chunk_size = 100000  # Process in large chunks
             
             # Precompute face vertices from cube
             face_vertices = cube[face_verts]  # shape (4, 3)
@@ -300,33 +299,18 @@ def export_voxel_stl_streaming_binary(voxel_space, voxel_size, file_path):
                 
                 num_tris = tris.shape[0]
                 
-                # Validate triangles (check for finite values)
-                valid_mask = np.isfinite(tris).all(axis=(1, 2))
-                
-                if not valid_mask.all():
-                    logger.warning(f"[Profile]: Face {face_idx} chunk {start}-{end} - {(~valid_mask).sum()} invalid triangles removed")
-                    tris = tris[valid_mask]
-                    num_tris = tris.shape[0]
-                
-                if num_tris == 0:
-                    continue
-                
                 # Prepare binary data: [normal(3), v1(3), v2(3), v3(3)] per triangle
                 tri_data = np.empty((num_tris, 12), dtype='<f4')
-                tri_data[:, 0:3] = normal  # Normal vector (same for all triangles)
-                tri_data[:, 3:6] = tris[:, 0, :]  # Vertex 1
-                tri_data[:, 6:9] = tris[:, 1, :]  # Vertex 2
-                tri_data[:, 9:12] = tris[:, 2, :] # Vertex 3
+                tri_data[:, 0:3] = normal
+                tri_data[:, 3:6] = tris[:, 0, :]
+                tri_data[:, 6:9] = tris[:, 1, :]
+                tri_data[:, 9:12] = tris[:, 2, :]
                 
-                # Write triangle data
+                # Write triangle data + attributes in one go
                 f.write(tri_data.tobytes())
-                
-                # Write attribute bytes (2 bytes per triangle)
                 f.write(b'\x00\x00' * num_tris)
                 
                 triangle_count += num_tris
-            
-            logger.info(f"[Profile]: Face {face_idx}/6 - {N} voxels, {triangle_count} total triangles")
 
         # Update triangle count in header
         f.seek(80)
@@ -334,15 +318,17 @@ def export_voxel_stl_streaming_binary(voxel_space, voxel_size, file_path):
 
     t1 = time.perf_counter()
     mem1 = tracemalloc.get_traced_memory()
-    logger.info(f"[Profile]: STL export complete. Time: {t1-t0:.2f}s, Mem: current={mem1[0]/1e6:.2f}MB, peak={mem1[1]/1e6:.2f}MB, Triangles: {triangle_count}")
+    logger.info(f"[Profile]: Binary STL export complete. Time: {t1-t0:.2f}s, Mem: current={mem1[0]/1e6:.2f}MB, peak={mem1[1]/1e6:.2f}MB, Triangles: {triangle_count}")
     tracemalloc.stop()
     
     return file_path
 
 def export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path):
     """
-    Export a voxel space as an ASCII STL file using streaming (low-memory) logic.
-    Only surface faces are written, and no full mesh is held in RAM.
+    Export a voxel space as an ASCII STL file.
+    
+    RECOMMENDATION: Use binary format instead - it's 5-10x faster and produces smaller files.
+    This ASCII implementation is provided for compatibility but will be slow for large models.
     
     Parameters:
     -----------
@@ -358,16 +344,18 @@ def export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path):
     str
         The path to the exported STL file
     """
+    logger.warning("[Mesh]: ASCII STL export is significantly slower than binary. Consider using binary format.")
     logger.info("[Profile]: Starting ASCII STL export")
+    tracemalloc.start()
     t0 = time.perf_counter()
     
     # Cube vertices (relative to center)
     cube = voxel_size * np.array([
         [-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [0.5, 0.5, -0.5], [-0.5, 0.5, -0.5],
         [-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5]
-    ])
+    ], dtype=np.float32)
     
-    # Face definitions: (vertex indices, normal vector)
+    # Face definitions
     faces = [
         ([0, 2, 1, 3], [0, 0, -1]),
         ([4, 5, 6, 7], [0, 0, 1]),
@@ -377,51 +365,69 @@ def export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path):
         ([1, 2, 6, 5], [1, 0, 0])
     ]
     
-    # Neighbor offsets for surface detection
+    # Neighbor offsets
     neighbors = [(0,0,-1), (0,0,1), (0,-1,0), (0,1,0), (-1,0,0), (1,0,0)]
 
     max_i, max_j, max_k = voxel_space.shape
+    filled = (voxel_space > 0)
+    triangle_count = 0
 
-    with open(file_path, 'w') as f:
+    with open(file_path, 'w', buffering=8*1024*1024) as f:  # 8MB buffer
         f.write("solid voxel\n")
 
+        # Pre-allocate a large buffer for batch writing
+        buffer_lines = []
+        buffer_size_limit = 50000  # Write every 50k lines
+        
         for i in range(max_i):
             for j in range(max_j):
                 for k in range(max_k):
-                    if voxel_space[i, j, k] > 0:
-                        center = np.array([i, j, k]) * voxel_size
+                    if not filled[i, j, k]:
+                        continue
+                    
+                    center = np.array([i, j, k], dtype=np.float32) * voxel_size
+                    
+                    for face_idx, (face_verts, normal) in enumerate(faces):
+                        ni, nj, nk = neighbors[face_idx]
+                        ni_i, nj_j, nk_k = i+ni, j+nj, k+nk
                         
-                        for face_idx, (face_verts, normal) in enumerate(faces):
-                            ni, nj, nk = neighbors[face_idx]
-                            ni_i, nj_j, nk_k = i+ni, j+nj, k+nk
-                            
-                            # Check if neighbor is empty or out of bounds
-                            is_surface = False
-                            if not (0 <= ni_i < max_i and 0 <= nj_j < max_j and 0 <= nk_k < max_k):
-                                is_surface = True
-                            elif voxel_space[ni_i, nj_j, nk_k] == 0:
-                                is_surface = True
-                            
-                            if not is_surface:
+                        # Check if surface face
+                        if 0 <= ni_i < max_i and 0 <= nj_j < max_j and 0 <= nk_k < max_k:
+                            if filled[ni_i, nj_j, nk_k]:
                                 continue
+                        
+                        # This is a surface face
+                        v = cube[face_verts] + center
+                        
+                        # Two triangles per face
+                        for tri_idx in [[0, 1, 2], [0, 2, 3]]:
+                            v0, v1, v2 = v[tri_idx]
+                            buffer_lines.append(
+                                f"  facet normal {normal[0]} {normal[1]} {normal[2]}\n"
+                                f"    outer loop\n"
+                                f"      vertex {v0[0]} {v0[1]} {v0[2]}\n"
+                                f"      vertex {v1[0]} {v1[1]} {v1[2]}\n"
+                                f"      vertex {v2[0]} {v2[1]} {v2[2]}\n"
+                                f"    endloop\n"
+                                f"  endfacet\n"
+                            )
+                            triangle_count += 1
                             
-                            # Get face vertices
-                            v = [cube[idx] + center for idx in face_verts]
-                            
-                            # Write two triangles per face
-                            for triangle in [[0, 1, 2], [0, 2, 3]]:
-                                f.write(f"  facet normal {normal[0]} {normal[1]} {normal[2]}\n")
-                                f.write("    outer loop\n")
-                                for idx in triangle:
-                                    vertex = v[idx]
-                                    f.write(f"      vertex {vertex[0]} {vertex[1]} {vertex[2]}\n")
-                                f.write("    endloop\n")
-                                f.write("  endfacet\n")
+                            # Write buffer when it gets large
+                            if len(buffer_lines) >= buffer_size_limit:
+                                f.write(''.join(buffer_lines))
+                                buffer_lines = []
+        
+        # Write remaining buffer
+        if buffer_lines:
+            f.write(''.join(buffer_lines))
 
         f.write("endsolid voxel\n")
 
     t1 = time.perf_counter()
-    logger.info(f"[Profile]: ASCII STL export complete. Time: {t1-t0:.2f}s")
+    mem1 = tracemalloc.get_traced_memory()
+    logger.info(f"[Profile]: ASCII STL export complete. Time: {t1-t0:.2f}s, Mem: current={mem1[0]/1e6:.2f}MB, peak={mem1[1]/1e6:.2f}MB, Triangles: {triangle_count}")
+    tracemalloc.stop()
     
     return file_path
 
@@ -440,6 +446,7 @@ def generate_and_export_mesh(voxel_space, voxel_size, file_path, binary=True):
         The path to save the STL file.
     binary : bool
         Whether to export in binary format (True) or ASCII format (False).
+        Binary is strongly recommended for performance.
 
     Returns:
     --------
@@ -451,10 +458,10 @@ def generate_and_export_mesh(voxel_space, voxel_size, file_path, binary=True):
         return None
     
     if binary:
-        logger.info("[Mesh]: Exporting STL in binary format using streaming approach")
+        logger.info("[Mesh]: Exporting STL in binary format (recommended)")
         return export_voxel_stl_streaming_binary(voxel_space, voxel_size, file_path)
     else:
-        logger.info("[Mesh]: Exporting STL in ASCII format using streaming approach")
+        logger.info("[Mesh]: Exporting STL in ASCII format (slow - consider binary instead)")
         return export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path)
 
 # Sparse voxel space utilities (kept for potential future use)

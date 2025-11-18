@@ -13,5 +13,5 @@
     "y_crop": ["all", "all"],
     "z_crop": [0.0, "all"],
     "consider_acceleration": false,
-    "stl_ascii": true
+    "stl_ascii": false
 }
