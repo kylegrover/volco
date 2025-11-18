@@ -13,6 +13,10 @@ class FakeInstruction(Instruction):
         self._number_printed_filaments = 0
         self._filaments_coordinates = list()
         self._default_nozzle_speed = 10.0
+        # Patch: provide a _printer attribute for compatibility
+        class _Printer:
+            feedstock_filament_diameter = 1.75
+        self._printer = _Printer()
 
     def read(self):
         pass
@@ -47,6 +51,7 @@ class FakeSimulation:
         self.step_size = 0.2
         self.radius_increment = 0.1
         self.solver_tolerance = 0.001
+        self.consider_acceleration = False
 
 
 class FakePrinter:
@@ -114,17 +119,19 @@ class FakeSimulationPrint:
         self.step_size = 0.2
         self.radius_increment = 0.1
         self.solver_tolerance = 0.001
+        self.consider_acceleration = False
+        self.sphere_z_offset = 0.0
 
 
 class TestPrint:
     def test_should_print(self):
+        printer = FakePrinter()
         test_instruction = Gcode(
-            gcode_path="tests/fixtures/gcode_example.gcode", default_nozzle_speed=40.0
+            gcode_path="tests/fixtures/gcode_example.gcode", default_nozzle_speed=40.0, printer=printer
         )
         test_instruction.read()
 
         simulation_config = FakeSimulationPrint()
-        printer = FakePrinter()
 
         voxel_space = VoxelSpace(
             instruction=test_instruction,

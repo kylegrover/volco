@@ -27,7 +27,7 @@ class Volume:
         if not consider_acceleration:
             # Simple case: evenly distribute the volume across steps
             volume_per_step = total_volume / number_simulation_steps
-            return [volume_per_step * (i + 1) for i in range(number_simulation_steps)]
+            return [volume_per_step for i in range(number_simulation_steps)]
         
         # Complex case: use acceleration-specific implementation
         from app.physics.acceleration.volume import AccelerationVolume

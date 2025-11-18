@@ -45,12 +45,54 @@ class VoxelSpace:
         self._simulation = simulation_config
         self._printer = printer
         self._consider_acceleration = self._simulation.consider_acceleration
+        # Running count of filled voxels (to avoid repeated `np.count_nonzero` calls)
+        self._filled_voxels_count = 0
 
     def initialize_space(self):
+        # Try to intelligently preallocate Z dimension to avoid repeated expansions.
+        # Estimate the maximum per-step sphere radius from filaments and add a safety margin.
+        z_dim = self.dimensions["z"]
+
+        try:
+            max_radius = 0.0
+            step_size = self._simulation.step_size
+            for filament in self._instruction.filaments_coordinates:
+                coord_old = filament[0]
+                coord_new = filament[1]
+                volume = filament[2]
+
+                # compute filament length and estimated number of steps
+                length = GeometryMath.distance(coord_old, coord_new)
+                n_steps = int(round(length / step_size))
+                if n_steps < 1:
+                    n_steps = 1
+
+                per_step_volume = volume / n_steps
+                # estimate radius of sphere that would contain this volume
+                radius = (3.0 * per_step_volume / (4.0 * math.pi)) ** (1.0 / 3.0)
+                if radius > max_radius:
+                    max_radius = radius
+
+            # include configured sphere z offset
+            max_extra_z = int(math.ceil((max_radius + self._simulation.sphere_z_offset) / self._simulation.voxel_size))
+
+            # safety margin (20% of current z) to reduce chance of further expansion
+            safety_margin = int(max(1, z_dim * 0.2))
+
+            if max_extra_z > 0:
+                z_dim = z_dim + max_extra_z + safety_margin
+
+            logging.getLogger(__name__).info(f"Preallocating voxel space z-dimension: base={self.dimensions['z']}, extra={max_extra_z}, safety={safety_margin}, final={z_dim}")
+        except Exception:
+            # Fallback to original allocation if any issue occurs during estimation
+            z_dim = self.dimensions["z"]
+
         self.space = np.zeros(
-            (self.dimensions["x"], self.dimensions["y"], self.dimensions["z"]),
+            (self.dimensions["x"], self.dimensions["y"], z_dim),
             dtype=np.int8,
         )
+        # reset the running counter when allocating space
+        self._filled_voxels_count = 0
 
     def print(self):
         number_printed_filaments = 0
@@ -135,8 +177,9 @@ class VoxelSpace:
         filament_initial_coordinates,
         volumes,
     ):
-        total_deposited_volume = GeometryMath.calculate_filled_volume(
-            self.space, self._simulation.voxel_size
+        # Use the running counter to compute total deposited volume quickly
+        total_deposited_volume = (
+            self._filled_voxels_count * self._simulation.voxel_size ** 3
         )
 
         for step_n in range(0, number_simulation_steps):
@@ -183,11 +226,20 @@ class VoxelSpace:
                 f"Depositing filament: step = {step_n + 1}/{number_simulation_steps}"
             )
 
-            self.space = sphere.deposit_sphere(
-                voxel_space=self.space,
+            # Pass the VoxelSpace instance so sphere code can update the
+            # running counter and expand the `.space` ndarray in-place.
+            voxel_space_out = sphere.deposit_sphere(
+                voxel_space=self,
                 nozzle_height=nozzle_height,
                 sphere_volume=sphere_volume,
                 voxel_space_target_volume=volume_target,
                 solver_tolerance=self._simulation.solver_tolerance,
                 radius_increment=self._simulation.radius_increment,
             )
+
+            # Ensure our internal `.space` and counter reflect any mutations
+            # returned by the sphere logic (voxel_space_out is a VoxelSpace)
+            if hasattr(voxel_space_out, "space"):
+                self.space = voxel_space_out.space
+            if hasattr(voxel_space_out, "_filled_voxels_count"):
+                self._filled_voxels_count = voxel_space_out._filled_voxels_count
