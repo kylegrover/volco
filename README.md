@@ -134,6 +134,7 @@ VOLCO uses two configuration files: simulation settings and printer settings. Be
 | `solver_tolerance` | Tolerance for volume conservation in the bisection method. | 0.0001 |
 | `consider_acceleration` | Whether to consider acceleration in volume distribution. | false |
 | `stl_ascii` | Whether to export STL in ASCII format (true) or binary (false). | false |
+| `preview_mode` | If true, runs a fast, lightweight preview that traces the G-code path and fills extrusions as capsules. No physics or overlap checks. Intended for quick feedback before running the full simulation. | false |
 
 ### Printer Configuration
 
@@ -155,6 +156,12 @@ VOLCO uses two configuration files: simulation settings and printer settings. Be
 - **z_offset**: Set to 0 as material cannot be deposited above the nozzle height.
 
 - **consider_acceleration**: When true, the simulation accounts for acceleration and deceleration, which can provide more accurate results but increases computation time.
+
+## Preview Mode
+
+Preview mode is designed for fast, lightweight visualization of the print path. It traces the G-code path and fills extrusions as capsules (cylinders with rounded ends), matching the nozzle diameter. This mode skips all physics and overlap checks, making it ideal for quick feedback and rapid iteration before running the full, volume-conserving simulation.
+
+If you want to run VOLCO in maximum speed mode (no volume conservation, no overlap checks), set `max_speed_mode: true` in your simulation config. This will trace the G-code path and fill voxels along it, suitable for fast preview, parallel, or GPU-optimized runs.
 
 ## Finite Element Analysis (FEA)
 
