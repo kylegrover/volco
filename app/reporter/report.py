@@ -7,7 +7,7 @@ from app.configs.simulation import Simulation
 from app.geometry.geometry_math import GeometryMath
 from app.geometry.voxel_space import VoxelSpace
 from app.reporter.visualization import color_mesh, visualize_with_trimesh, visualize_with_plotly
-from app.reporter.mesh import generate_mesh_from_voxels, export_mesh_to_stl
+from app.reporter.mesh import generate_mesh_from_voxels, export_mesh_to_stl, generate_and_export_mesh
 
 
 logger = logging.getLogger(__name__)
@@ -116,17 +116,23 @@ class SimulationOutput:
         If file_path is not provided, uses the default path based on simulation settings.
         Uses the stl_ascii setting from simulation configuration to determine the STL format.
         """
+        # If preview_mode, or if a streaming export is desired, bypass building a mesh
+        result_path = self._get_result_folder_path()
+        stl_file_name = self._simulation.simulation_name + ".stl"
+        file_path = os.path.join(result_path, stl_file_name)
+
+        if getattr(self._simulation, 'preview_mode', False):
+            logger.info("[SimulationOutput]: Preview mode export — using streaming exporter.")
+            # Use the vectorized streaming exporter which accepts voxel_space directly
+            return generate_and_export_mesh(self.cropped_voxel_space, self._simulation.voxel_size, file_path, binary=not self._simulation.stl_ascii)
+
+        # Non-preview: expect a mesh object to be provided or generated previously
         if mesh is None:
             if self.mesh is None:
                 logger.warning("[SimulationOutput]: No mesh available. Generate mesh first.")
                 return
             mesh = self.mesh
-            
-        
-        result_path = self._get_result_folder_path()
-        stl_file_name = self._simulation.simulation_name + ".stl"
-        file_path = os.path.join(result_path, stl_file_name)
-        
+
         return export_mesh_to_stl(mesh, file_path, ascii_format=self._simulation.stl_ascii)
 
     def visualize_mesh(self, mesh=None, visualizer='trimesh', color_scheme='cyan_blue'):
