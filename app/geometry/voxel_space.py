@@ -95,41 +95,35 @@ class VoxelSpace:
         self._filled_voxels_count = 0
 
     def print(self):
+        # Check for preview mode in simulation config
+        if hasattr(self._simulation, "preview_mode") and self._simulation.preview_mode:
+            self.print_preview_mode()
+            return
+
         number_printed_filaments = 0
         number_printed_layers = 0
-
         initial_z_coordinate = 0.0
-
         print(self._instruction.filaments_coordinates)
-
         for filament_coordinates in self._instruction.filaments_coordinates:
             (
                 initial_coordinate,
                 final_coordinate,
             ) = self._find_initial_and_final_filament_coordinates(filament_coordinates)
-
             direction_vector = GeometryMath.direction_vector(
                 initial_coordinate, final_coordinate
             )
-
             printing_speed = filament_coordinates[1][4]
-
             volume = filament_coordinates[2]  # Now this is volume, not E
-
             number_printed_filaments += 1
-
             if final_coordinate[2] > initial_z_coordinate:
                 number_printed_layers += 1
                 initial_z_coordinate = final_coordinate[2]
-
             filament_length = GeometryMath.distance(
                 initial_coordinate, final_coordinate
             )
-
             number_simulation_steps, step_size = self._find_simulation_step_info(
                 filament_length
             )
-
             volumes = Volume.get_volumes_for_filament(
                 number_simulation_steps=number_simulation_steps,
                 total_volume=volume,
@@ -138,7 +132,6 @@ class VoxelSpace:
                 printing_speed=printing_speed,
                 printer=self._printer,
             )
-
             self._deposit_filament(
                 number_simulation_steps=number_simulation_steps,
                 step_size=step_size,
@@ -146,6 +139,52 @@ class VoxelSpace:
                 filament_initial_coordinates=initial_coordinate,
                 volumes=volumes,
             )
+
+    def print_preview_mode(self):
+        """
+        Preview mode: Fast, lightweight visualization. Traces G-code path and fills a capsule (cylinder with rounded endcaps) between last and current point if extruder is on. No physics, no overlap checks. Intended for quick feedback before running the full simulation.
+        """
+        nozzle_radius = self._printer.nozzle_diameter / 2.0
+        voxel_size = self._simulation.voxel_size
+        # Use the same logic as the default mode: fill capsule for every filament segment
+        for filament_coordinates in self._instruction.filaments_coordinates:
+            initial, final = self._find_initial_and_final_filament_coordinates(filament_coordinates)
+            # Only fill if the segment has positive volume
+            volume = filament_coordinates[2]
+            if volume > 0:
+                min_x = min(initial[0], final[0]) - nozzle_radius
+                max_x = max(initial[0], final[0]) + nozzle_radius
+                min_y = min(initial[1], final[1]) - nozzle_radius
+                max_y = max(initial[1], final[1]) + nozzle_radius
+                min_z = min(initial[2], final[2]) - nozzle_radius
+                max_z = max(initial[2], final[2]) + nozzle_radius
+                i_min = max(0, int(min_x / voxel_size))
+                i_max = min(self.space.shape[0] - 1, int(max_x / voxel_size))
+                j_min = max(0, int(min_y / voxel_size))
+                j_max = min(self.space.shape[1] - 1, int(max_y / voxel_size))
+                k_min = max(0, int(min_z / voxel_size))
+                k_max = min(self.space.shape[2] - 1, int(max_z / voxel_size))
+                # Vectorized capsule SDF fill
+                p1 = np.array(initial)
+                p2 = np.array(final)
+                ba = p2 - p1
+                ba_dot_ba = np.dot(ba, ba) if np.dot(ba, ba) > 0 else 1e-8
+                ii, jj, kk = np.meshgrid(
+                    np.arange(i_min, i_max + 1),
+                    np.arange(j_min, j_max + 1),
+                    np.arange(k_min, k_max + 1),
+                    indexing='ij'
+                )
+                voxel_centers = np.stack([
+                    (ii + 0.5) * voxel_size,
+                    (jj + 0.5) * voxel_size,
+                    (kk + 0.5) * voxel_size
+                ], axis=-1)
+                pa = voxel_centers - p1
+                h = np.clip(np.sum(pa * ba, axis=-1) / ba_dot_ba, 0.0, 1.0)
+                capsule_sdf = np.sqrt(np.sum((pa - ba * h[..., None]) ** 2, axis=-1)) - nozzle_radius
+                inside = capsule_sdf <= 0
+                self.space[ii[inside], jj[inside], kk[inside]] = 1
 
     def _find_initial_and_final_filament_coordinates(self, filament_coordinates):
         initial = [

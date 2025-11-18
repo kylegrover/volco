@@ -114,8 +114,20 @@ def run_simulation(
 if __name__ == "__main__":
     options = Arguments.get_options()
 
+    # Load simulation config from file if provided
+    sim_config = None
+    if options.sim:
+        with open(options.sim, "r") as f:
+            sim_config = json.load(f)
+    # If --preview is set, override preview_mode in config
+    if options.preview:
+        if sim_config is None:
+            sim_config = {}
+        sim_config["preview_mode"] = True
+
     run_simulation(
         gcode_path=options.gcode,
         printer_config_path=options.printer,
-        sim_config_path=options.sim
+        sim_config=sim_config if sim_config is not None else None,
+        sim_config_path=None if sim_config is not None else options.sim
     )

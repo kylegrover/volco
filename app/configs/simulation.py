@@ -53,3 +53,6 @@ class Simulation:
         # Default acceleration and STL settings
         self.consider_acceleration = config.get("consider_acceleration", False)
         self.stl_ascii = config.get("stl_ascii", False)
+
+        # Preview mode (fast, lightweight visualization)
+        self.preview_mode = config.get("preview_mode", False)

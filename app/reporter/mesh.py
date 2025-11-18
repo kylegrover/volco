@@ -30,101 +30,69 @@ def create_box_representation(voxel_space, voxel_size):
     trimesh.Trimesh
         A mesh containing only visible faces of filled voxels
     """
-    # Find the indices of filled voxels
-    filled_voxels = np.where(voxel_space > 0)
-    
-    # If no filled voxels, return an empty scene
-    if len(filled_voxels[0]) == 0:
+    # Find filled voxels
+    filled = (voxel_space > 0)
+    if not np.any(filled):
         return trimesh.Scene()
-    
-    # Get the dimensions of the voxel space
+
     max_i, max_j, max_k = voxel_space.shape
-    
-    # Define a unit cube vertices (8 corners)
     unit_cube_vertices = np.array([
-        [-0.5, -0.5, -0.5],  # 0: bottom, back, left
-        [0.5, -0.5, -0.5],   # 1: bottom, back, right
-        [0.5, 0.5, -0.5],    # 2: bottom, front, right
-        [-0.5, 0.5, -0.5],   # 3: bottom, front, left
-        [-0.5, -0.5, 0.5],   # 4: top, back, left
-        [0.5, -0.5, 0.5],    # 5: top, back, right
-        [0.5, 0.5, 0.5],     # 6: top, front, right
-        [-0.5, 0.5, 0.5]     # 7: top, front, left
+        [-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [0.5, 0.5, -0.5], [-0.5, 0.5, -0.5],
+        [-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5]
     ])
-    
-    # Define the faces for each side of the cube (2 triangles per face)
-    # Each face is associated with a direction (negative or positive x, y, z)
     face_definitions = [
-        # Face indices, Direction to check (di, dj, dk)
-        ([[0, 2, 1], [0, 3, 2]], (0, 0, -1)),  # bottom face (negative z)
-        ([[4, 5, 6], [4, 6, 7]], (0, 0, 1)),   # top face (positive z)
-        ([[0, 1, 5], [0, 5, 4]], (0, -1, 0)),  # back face (negative y)
-        ([[2, 3, 7], [2, 7, 6]], (0, 1, 0)),   # front face (positive y)
-        ([[0, 4, 7], [0, 7, 3]], (-1, 0, 0)),  # left face (negative x)
-        ([[1, 2, 6], [1, 6, 5]], (1, 0, 0))    # right face (positive x)
+        ([[0, 2, 1], [0, 3, 2]], (0, 0, -1)),
+        ([[4, 5, 6], [4, 6, 7]], (0, 0, 1)),
+        ([[0, 1, 5], [0, 5, 4]], (0, -1, 0)),
+        ([[2, 3, 7], [2, 7, 6]], (0, 1, 0)),
+        ([[0, 4, 7], [0, 7, 3]], (-1, 0, 0)),
+        ([[1, 2, 6], [1, 6, 5]], (1, 0, 0))
     ]
-    
-    # First pass: determine which voxels need to have vertices added
-    # and which faces need to be rendered
-    voxels_to_render = {}  # Maps voxel index to list of faces to render
-    
-    for idx, (i, j, k) in enumerate(zip(*filled_voxels)):
-        faces_to_render = []
-        
-        # Check each face to see if it should be rendered
-        for face_idx, (face_triangles, (di, dj, dk)) in enumerate(face_definitions):
-            # Check if this face is at the boundary or adjacent to an empty voxel
-            ni, nj, nk = i + di, j + dj, k + dk
-            
-            # If the neighbor is outside the voxel space or is empty, render this face
-            if (ni < 0 or ni >= max_i or
-                nj < 0 or nj >= max_j or
-                nk < 0 or nk >= max_k or
-                voxel_space[ni, nj, nk] == 0):
-                
-                faces_to_render.append(face_idx)
-        
-        # If this voxel has faces to render, add it to the dictionary
-        if faces_to_render:
-            voxels_to_render[(i, j, k)] = faces_to_render
-    
-    # Second pass: create vertices and faces
+
+    # Vectorized neighbor check for all filled voxels
+    filled_indices = np.array(np.where(filled)).T
     all_vertices = []
     all_faces = []
-    voxel_to_vertex_idx = {}  # Maps voxel coordinates to starting vertex index
-    
-    for idx, (i, j, k) in enumerate(voxels_to_render.keys()):
-        # Calculate the center position of the voxel
-        center = np.array([
-            (i) * voxel_size,
-            (j) * voxel_size,
-            (k) * voxel_size
-        ])
-        
-        # Scale and translate the unit cube vertices for this voxel
-        voxel_vertices = unit_cube_vertices * voxel_size + center
-        
-        # Add vertices for this voxel
-        vertex_start = len(all_vertices)
-        all_vertices.extend(voxel_vertices)
-        voxel_to_vertex_idx[(i, j, k)] = vertex_start
-        
-        # Add faces for this voxel
-        for face_idx in voxels_to_render[(i, j, k)]:
-            face_triangles = face_definitions[face_idx][0]
+    vertex_count = 0
+    for face_idx, (face_triangles, (di, dj, dk)) in enumerate(face_definitions):
+        # Use numpy slicing for neighbor checks
+        if di != 0:
+            if di > 0:
+                mask = np.zeros_like(filled)
+                mask[:-1, :, :] = filled[:-1, :, :] & (~filled[1:, :, :])
+            else:
+                mask = np.zeros_like(filled)
+                mask[1:, :, :] = filled[1:, :, :] & (~filled[:-1, :, :])
+        elif dj != 0:
+            if dj > 0:
+                mask = np.zeros_like(filled)
+                mask[:, :-1, :] = filled[:, :-1, :] & (~filled[:, 1:, :])
+            else:
+                mask = np.zeros_like(filled)
+                mask[:, 1:, :] = filled[:, 1:, :] & (~filled[:, :-1, :])
+        elif dk != 0:
+            if dk > 0:
+                mask = np.zeros_like(filled)
+                mask[:, :, :-1] = filled[:, :, :-1] & (~filled[:, :, 1:])
+            else:
+                mask = np.zeros_like(filled)
+                mask[:, :, 1:] = filled[:, :, 1:] & (~filled[:, :, :-1])
+        face_voxels = np.array(np.where(mask)).T
+        for idx in face_voxels:
+            i, j, k = idx
+            center = np.array([i, j, k]) * voxel_size
+            voxel_vertices = unit_cube_vertices * voxel_size + center
+            v_start = vertex_count
+            all_vertices.extend(voxel_vertices)
+            vertex_count += 8
             for triangle in face_triangles:
-                all_faces.append([t + vertex_start for t in triangle])
-    
-    # Convert lists to numpy arrays
+                all_faces.append([v_start + t for t in triangle])
     if all_vertices and all_faces:
         vertices_array = np.array(all_vertices)
         faces_array = np.array(all_faces)
-        
-        # Create a mesh from the vertices and faces
         mesh = trimesh.Trimesh(vertices=vertices_array, faces=faces_array)
         return mesh
     else:
-        # If no faces were added, return an empty scene
         return trimesh.Scene()
 
 def generate_mesh_from_voxels(voxel_space, voxel_size):
@@ -212,6 +180,7 @@ def export_mesh_to_stl(mesh, file_path, ascii_format=True):
         
         # Use the generic export function which works for both Scene and Trimesh objects
         trimesh.exchange.export.export_mesh(mesh, file_path, **export_options)
+        # mesh.export(file_path, **export_options)
             
         logger.info(f"[Mesh]: STL exported in {format_type} format!")
         return file_path
