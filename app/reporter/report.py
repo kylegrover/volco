@@ -121,10 +121,11 @@ class SimulationOutput:
         stl_file_name = self._simulation.simulation_name + ".stl"
         file_path = os.path.join(result_path, stl_file_name)
 
-        if getattr(self._simulation, 'preview_mode', False):
-            logger.info("[SimulationOutput]: Preview mode export — using streaming exporter.")
-            # Use the vectorized streaming exporter which accepts voxel_space directly
-            return generate_and_export_mesh(self.cropped_voxel_space, self._simulation.voxel_size, file_path, binary=not self._simulation.stl_ascii)
+        # Use streaming exporter for all STL exports
+        # This avoids creating a massive mesh object in memory
+        logger.info("[SimulationOutput]: Using streaming exporter for STL.")
+        # Use the vectorized streaming exporter which accepts voxel_space directly
+        return generate_and_export_mesh(self.cropped_voxel_space, self._simulation.voxel_size, file_path, binary=not self._simulation.stl_ascii)
 
         # Non-preview: expect a mesh object to be provided or generated previously
         if mesh is None:

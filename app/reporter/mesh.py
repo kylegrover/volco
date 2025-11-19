@@ -233,8 +233,9 @@ def export_voxel_stl_streaming_binary(voxel_space, voxel_size, file_path):
     ], dtype=np.float32)
     
     # Face definitions: (vertex indices, normal vector)
+    # Fixed -Z face winding order to [0, 3, 2, 1] for correct normal
     faces = [
-        ([0, 2, 1, 3], np.array([0, 0, -1], dtype=np.float32)),  # -Z
+        ([0, 3, 2, 1], np.array([0, 0, -1], dtype=np.float32)),  # -Z
         ([4, 5, 6, 7], np.array([0, 0, 1], dtype=np.float32)),   # +Z
         ([0, 1, 5, 4], np.array([0, -1, 0], dtype=np.float32)),  # -Y
         ([2, 3, 7, 6], np.array([0, 1, 0], dtype=np.float32)),   # +Y
@@ -282,6 +283,16 @@ def export_voxel_stl_streaming_binary(voxel_space, voxel_size, file_path):
             # Precompute face vertices from cube
             face_vertices = cube[face_verts]  # shape (4, 3)
             
+            # Define structured dtype for binary STL triangle (50 bytes)
+            # normal(12) + v1(12) + v2(12) + v3(12) + attr(2)
+            stl_dtype = np.dtype([
+                ('normal', '<f4', (3,)),
+                ('v1', '<f4', (3,)),
+                ('v2', '<f4', (3,)),
+                ('v3', '<f4', (3,)),
+                ('attr', '<u2')
+            ])
+            
             for start in range(0, N, chunk_size):
                 end = min(N, start + chunk_size)
                 idx_chunk = indices[start:end]
@@ -299,16 +310,16 @@ def export_voxel_stl_streaming_binary(voxel_space, voxel_size, file_path):
                 
                 num_tris = tris.shape[0]
                 
-                # Prepare binary data: [normal(3), v1(3), v2(3), v3(3)] per triangle
-                tri_data = np.empty((num_tris, 12), dtype='<f4')
-                tri_data[:, 0:3] = normal
-                tri_data[:, 3:6] = tris[:, 0, :]
-                tri_data[:, 6:9] = tris[:, 1, :]
-                tri_data[:, 9:12] = tris[:, 2, :]
+                # Create structured array for correct binary layout
+                chunk_data = np.zeros(num_tris, dtype=stl_dtype)
+                chunk_data['normal'] = normal
+                chunk_data['v1'] = tris[:, 0, :]
+                chunk_data['v2'] = tris[:, 1, :]
+                chunk_data['v3'] = tris[:, 2, :]
+                # 'attr' is initialized to 0 by np.zeros
                 
-                # Write triangle data + attributes in one go
-                f.write(tri_data.tobytes())
-                f.write(b'\x00\x00' * num_tris)
+                # Write chunk to file
+                f.write(chunk_data.tobytes())
                 
                 triangle_count += num_tris
 
@@ -325,10 +336,8 @@ def export_voxel_stl_streaming_binary(voxel_space, voxel_size, file_path):
 
 def export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path):
     """
-    Export a voxel space as an ASCII STL file.
-    
-    RECOMMENDATION: Use binary format instead - it's 5-10x faster and produces smaller files.
-    This ASCII implementation is provided for compatibility but will be slow for large models.
+    Export a voxel space as an ASCII STL file using streaming (low-memory) logic.
+    Super-optimized using NumPy vectorized string operations to avoid Python loops.
     
     Parameters:
     -----------
@@ -344,8 +353,7 @@ def export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path):
     str
         The path to the exported STL file
     """
-    logger.warning("[Mesh]: ASCII STL export is significantly slower than binary. Consider using binary format.")
-    logger.info("[Profile]: Starting ASCII STL export")
+    logger.info("[Profile]: Starting vectorized streaming ASCII STL export (NumPy optimized)")
     tracemalloc.start()
     t0 = time.perf_counter()
     
@@ -355,18 +363,15 @@ def export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path):
         [-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5]
     ], dtype=np.float32)
     
-    # Face definitions
+    # Face definitions: (vertex indices, normal vector)
     faces = [
-        ([0, 2, 1, 3], [0, 0, -1]),
-        ([4, 5, 6, 7], [0, 0, 1]),
-        ([0, 1, 5, 4], [0, -1, 0]),
-        ([2, 3, 7, 6], [0, 1, 0]),
-        ([0, 4, 7, 3], [-1, 0, 0]),
-        ([1, 2, 6, 5], [1, 0, 0])
+        ([0, 3, 2, 1], np.array([0, 0, -1], dtype=np.float32)),  # -Z
+        ([4, 5, 6, 7], np.array([0, 0, 1], dtype=np.float32)),   # +Z
+        ([0, 1, 5, 4], np.array([0, -1, 0], dtype=np.float32)),  # -Y
+        ([2, 3, 7, 6], np.array([0, 1, 0], dtype=np.float32)),   # +Y
+        ([0, 4, 7, 3], np.array([-1, 0, 0], dtype=np.float32)),  # -X
+        ([1, 2, 6, 5], np.array([1, 0, 0], dtype=np.float32))    # +X
     ]
-    
-    # Neighbor offsets
-    neighbors = [(0,0,-1), (0,0,1), (0,-1,0), (0,1,0), (-1,0,0), (1,0,0)]
 
     max_i, max_j, max_k = voxel_space.shape
     filled = (voxel_space > 0)
@@ -374,53 +379,101 @@ def export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path):
 
     with open(file_path, 'w', buffering=8*1024*1024) as f:  # 8MB buffer
         f.write("solid voxel\n")
-
-        # Pre-allocate a large buffer for batch writing
-        buffer_lines = []
-        buffer_size_limit = 50000  # Write every 50k lines
         
-        for i in range(max_i):
-            for j in range(max_j):
-                for k in range(max_k):
-                    if not filled[i, j, k]:
-                        continue
-                    
-                    center = np.array([i, j, k], dtype=np.float32) * voxel_size
-                    
-                    for face_idx, (face_verts, normal) in enumerate(faces):
-                        ni, nj, nk = neighbors[face_idx]
-                        ni_i, nj_j, nk_k = i+ni, j+nj, k+nk
-                        
-                        # Check if surface face
-                        if 0 <= ni_i < max_i and 0 <= nj_j < max_j and 0 <= nk_k < max_k:
-                            if filled[ni_i, nj_j, nk_k]:
-                                continue
-                        
-                        # This is a surface face
-                        v = cube[face_verts] + center
-                        
-                        # Two triangles per face
-                        for tri_idx in [[0, 1, 2], [0, 2, 3]]:
-                            v0, v1, v2 = v[tri_idx]
-                            buffer_lines.append(
-                                f"  facet normal {normal[0]} {normal[1]} {normal[2]}\n"
-                                f"    outer loop\n"
-                                f"      vertex {v0[0]} {v0[1]} {v0[2]}\n"
-                                f"      vertex {v1[0]} {v1[1]} {v1[2]}\n"
-                                f"      vertex {v2[0]} {v2[1]} {v2[2]}\n"
-                                f"    endloop\n"
-                                f"  endfacet\n"
-                            )
-                            triangle_count += 1
-                            
-                            # Write buffer when it gets large
-                            if len(buffer_lines) >= buffer_size_limit:
-                                f.write(''.join(buffer_lines))
-                                buffer_lines = []
-        
-        # Write remaining buffer
-        if buffer_lines:
-            f.write(''.join(buffer_lines))
+        for face_idx, (face_verts, normal) in enumerate(faces):
+            # Build surface mask for this face direction
+            mask = np.zeros_like(filled, dtype=bool)
+            
+            if face_idx == 0:  # -Z face
+                mask[:, :, :-1] = filled[:, :, :-1] & ~filled[:, :, 1:]
+            elif face_idx == 1:  # +Z face
+                mask[:, :, 1:] = filled[:, :, 1:] & ~filled[:, :, :-1]
+            elif face_idx == 2:  # -Y face
+                mask[:, :-1, :] = filled[:, :-1, :] & ~filled[:, 1:, :]
+            elif face_idx == 3:  # +Y face
+                mask[:, 1:, :] = filled[:, 1:, :] & ~filled[:, :-1, :]
+            elif face_idx == 4:  # -X face
+                mask[:-1, :, :] = filled[:-1, :, :] & ~filled[1:, :, :]
+            elif face_idx == 5:  # +X face
+                mask[1:, :, :] = filled[1:, :, :] & ~filled[:-1, :, :]
+            
+            # Get indices of voxels with visible faces
+            indices = np.array(np.where(mask)).T
+            
+            if indices.size == 0:
+                continue
+            
+            N = indices.shape[0]
+            chunk_size = 20000  # Process in chunks to manage memory
+            
+            # Precompute face vertices from cube
+            face_vertices = cube[face_verts]  # shape (4, 3)
+            
+            # Pre-format normal string
+            nx, ny, nz = normal
+            normal_str = f"  facet normal {nx:.6g} {ny:.6g} {nz:.6g}\n"
+            outer_loop_str = "    outer loop\n"
+            end_loop_str = "    endloop\n  endfacet\n"
+            
+            for start in range(0, N, chunk_size):
+                end = min(N, start + chunk_size)
+                idx_chunk = indices[start:end]
+                
+                # Compute voxel centers
+                centers = idx_chunk.astype(np.float32) * voxel_size
+                
+                # Build vertices for all voxels in chunk: shape (M, 4, 3)
+                verts = centers[:, np.newaxis, :] + face_vertices[np.newaxis, :, :]
+                
+                # Create two triangles per face
+                tri0 = verts[:, [0, 1, 2], :]  # shape (M, 3, 3)
+                tri1 = verts[:, [0, 2, 3], :]  # shape (M, 3, 3)
+                tris = np.vstack([tri0, tri1])  # shape (2*M, 3, 3)
+                
+                num_tris = tris.shape[0]
+                triangle_count += num_tris
+                
+                # --- Vectorized String Formatting ---
+                # Format vertices to strings using numpy
+                # We flatten to (num_tris * 3, 3) to format all vertices at once
+                all_verts = tris.reshape(-1, 3)
+                
+                # Format X, Y, Z columns
+                # %.6g is standard for STL
+                xs = np.char.mod('%.6g', all_verts[:, 0])
+                ys = np.char.mod('%.6g', all_verts[:, 1])
+                zs = np.char.mod('%.6g', all_verts[:, 2])
+                
+                # Combine into "vertex X Y Z\n"
+                # We use np.core.defchararray.add which is vectorized string concatenation
+                v_str = np.char.add(np.char.add(np.char.add(np.char.add(np.char.add(
+                    np.array(["      vertex "]*len(xs)), xs), 
+                    np.array([" "]*len(xs))), ys), 
+                    np.array([" "]*len(xs))), zs)
+                v_str = np.char.add(v_str, np.array(["\n"]*len(xs)))
+                
+                # Reshape back to (num_tris, 3)
+                v_str = v_str.reshape(num_tris, 3)
+                
+                # Combine all parts
+                # Each triangle: normal + outer + v1 + v2 + v3 + endloop
+                
+                # Create arrays for static parts
+                normals = np.full(num_tris, normal_str)
+                outers = np.full(num_tris, outer_loop_str)
+                endloops = np.full(num_tris, end_loop_str)
+                
+                # Concatenate everything
+                # This creates one huge string per triangle
+                tri_strings = np.char.add(np.char.add(np.char.add(np.char.add(np.char.add(
+                    normals, outers), 
+                    v_str[:, 0]), 
+                    v_str[:, 1]), 
+                    v_str[:, 2]), 
+                    endloops)
+                
+                # Join all triangle strings and write
+                f.write("".join(tri_strings))
 
         f.write("endsolid voxel\n")
 
@@ -457,12 +510,21 @@ def generate_and_export_mesh(voxel_space, voxel_size, file_path, binary=True):
         logger.warning("[Mesh]: No voxel space provided.")
         return None
     
-    if binary:
-        logger.info("[Mesh]: Exporting STL in binary format (recommended)")
-        return export_voxel_stl_streaming_binary(voxel_space, voxel_size, file_path)
-    else:
-        logger.info("[Mesh]: Exporting STL in ASCII format (slow - consider binary instead)")
-        return export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path)
+    try:
+        if binary:
+            logger.info("[Mesh]: Exporting STL in binary format (recommended)")
+            format_type = "binary"
+            result_path = export_voxel_stl_streaming_binary(voxel_space, voxel_size, file_path)
+        else:
+            logger.info("[Mesh]: Exporting STL in ASCII format (optimized streaming)")
+            format_type = "ASCII"
+            result_path = export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path)
+        
+        logger.info(f"[Mesh]: STL exported in {format_type} format!")
+        return result_path
+    except Exception as e:
+        logger.error(f"[Mesh]: Failed to export STL: {e}")
+        return None
 
 # Sparse voxel space utilities (kept for potential future use)
 def dense_to_sparse(voxel_space):

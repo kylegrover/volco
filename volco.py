@@ -99,13 +99,13 @@ def run_simulation(
     # Crop the voxel space
     output.crop_voxel_space()
 
-    output.generate_mesh()
+    # Debug: Log stl_ascii setting
+    # logger.info(f"[Volco]: stl_ascii setting is {getattr(simulation, 'stl_ascii', 'Not Set')}")
 
-    
-    # For CLI usage, generate and export STL automatically
-    if __name__ == "__main__":
-        output.export_mesh_to_stl()
-    
+    # Generate mesh
+    # We now use streaming export for both binary and ASCII, so we don't need to generate a full mesh object
+    logging.info("[Volco]: Skipping mesh generation (using streaming export)")
+
     print(f"\nTotal simulation time: {time.time() - start_time:.2f} seconds")
     
     return output
@@ -125,9 +125,12 @@ if __name__ == "__main__":
             sim_config = {}
         sim_config["preview_mode"] = True
 
-    run_simulation(
+    output = run_simulation(
         gcode_path=options.gcode,
         printer_config_path=options.printer,
         sim_config=sim_config if sim_config is not None else None,
         sim_config_path=None if sim_config is not None else options.sim
     )
+    
+    # Export STL
+    output.export_mesh_to_stl()
