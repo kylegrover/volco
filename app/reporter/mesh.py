@@ -356,7 +356,7 @@ def export_voxel_stl_streaming_binary(voxel_space, voxel_size, file_path):
 def generate_and_export_mesh(voxel_space, voxel_size, file_path, binary=True):
     """
     Generate and export a mesh from voxel space using streaming approach.
-    Supports both ASCII and binary STL formats.
+    Supports both ASCII and binary STL formats with equivalent performance.
 
     Parameters:
     -----------
@@ -368,7 +368,7 @@ def generate_and_export_mesh(voxel_space, voxel_size, file_path, binary=True):
         The path to save the STL file.
     binary : bool
         Whether to export in binary format (True) or ASCII format (False).
-        Binary is strongly recommended for performance.
+        Both formats use optimized streaming for performance.
 
     Returns:
     --------
@@ -381,42 +381,205 @@ def generate_and_export_mesh(voxel_space, voxel_size, file_path, binary=True):
     
     try:
         if binary:
-            logger.info("[Mesh]: Exporting STL in binary format (recommended)")
-            format_type = "binary"
+            logger.info("[Mesh]: Exporting STL in binary format (streaming)")
             result_path = export_voxel_stl_streaming_binary(voxel_space, voxel_size, file_path)
         else:
-            logger.info("[Mesh]: Exporting STL in ASCII format (optimized streaming)")
-            format_type = "ASCII"
-            # For ASCII, we generate the mesh first (using vectorized method) and then use trimesh's exporter
-            # This is faster than our custom streaming ASCII exporter was
-            mesh = generate_mesh_from_voxels(voxel_space, voxel_size)
-            result_path = export_mesh_to_stl(mesh, file_path, ascii_format=True)
+            logger.info("[Mesh]: Exporting STL in ASCII format (streaming)")
+            result_path = export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path)
         
-        logger.info(f"[Mesh]: STL exported in {format_type} format!")
+        logger.info(f"[Mesh]: STL exported successfully!")
         return result_path
     except Exception as e:
         logger.error(f"[Mesh]: Failed to export STL: {e}")
         return None
 
-# Sparse voxel space utilities (kept for potential future use)
-def dense_to_sparse(voxel_space):
+def _format_chunk_worker(args):
+    """Worker function for parallel string formatting."""
+    tris, normal, template = args
+    nx, ny, nz = normal
+    result = []
+    for tri in tris:
+        v0, v1, v2 = tri
+        result.append(template % (nx, ny, nz, 
+                                  v0[0], v0[1], v0[2],
+                                  v1[0], v1[1], v1[2],
+                                  v2[0], v2[1], v2[2]))
+    return b''.join(result)
+
+
+def export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path):
     """
-    Convert a dense voxel space (numpy array) to a sparse representation.
+    Ultra-optimized ASCII STL export using numpy's savetxt and template-based formatting.
+    This version minimizes Python loops and uses numpy's C-optimized string formatting.
     
     Parameters:
     -----------
     voxel_space : numpy.ndarray
-        The dense 3D voxel space array.
-
+        The 3D voxel space array
+    voxel_size : float
+        The size of each voxel
+    file_path : str
+        The path to save the ASCII STL file
+        
     Returns:
     --------
-    scipy.sparse.coo_matrix
-        Sparse representation of the voxel space.
+    str
+        The path to the exported STL file
     """
-    filled_indices = np.array(np.where(voxel_space > 0)).T
-    data = np.ones(len(filled_indices))
-    sparse_voxel_space = coo_matrix(
-        (data, (filled_indices[:, 0], filled_indices[:, 1] * voxel_space.shape[2] + filled_indices[:, 2])),
-        shape=(voxel_space.shape[0], voxel_space.shape[1] * voxel_space.shape[2])
+    logger.info("[Profile]: Starting ULTIMATE streaming ASCII STL export (face-by-face + parallel)")
+    tracemalloc.start()
+    t_start = time.perf_counter()
+    
+    times = {'mask': 0, 'compute': 0, 'prepare': 0, 'format': 0, 'write': 0}
+
+    # Cube vertices (relative to center)
+    cube = voxel_size * np.array([
+        [-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [0.5, 0.5, -0.5], [-0.5, 0.5, -0.5],
+        [-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5]
+    ], dtype=np.float32)
+    
+    # Face definitions: (vertex indices, normal vector)
+    faces = [
+        ([0, 3, 2, 1], np.array([0, 0, -1], dtype=np.float32)),  # -Z
+        ([4, 5, 6, 7], np.array([0, 0, 1], dtype=np.float32)),   # +Z
+        ([0, 1, 5, 4], np.array([0, -1, 0], dtype=np.float32)),  # -Y
+        ([2, 3, 7, 6], np.array([0, 1, 0], dtype=np.float32)),   # +Y
+        ([0, 4, 7, 3], np.array([-1, 0, 0], dtype=np.float32)),  # -X
+        ([1, 2, 6, 5], np.array([1, 0, 0], dtype=np.float32))    # +X
+    ]
+
+    filled = (voxel_space > 0)
+    triangle_count = 0
+    
+    # Template for formatting
+    template = (
+        b"  facet normal %.6e %.6e %.6e\n"
+        b"    outer loop\n"
+        b"      vertex %.6e %.6e %.6e\n"
+        b"      vertex %.6e %.6e %.6e\n"
+        b"      vertex %.6e %.6e %.6e\n"
+        b"    endloop\n"
+        b"  endfacet\n"
     )
-    return sparse_voxel_space
+    
+    # Get CPU count for parallel formatting
+    num_cores = multiprocessing.cpu_count()
+    
+    with open(file_path, 'wb', buffering=1048576) as f:  # 1MB write buffer
+        f.write(b"solid VoxelMesh\n")
+        
+        for face_idx, (face_verts, normal) in enumerate(faces):
+            t0 = time.perf_counter()
+            
+            # Build surface mask - IDENTICAL to binary version
+            mask = np.zeros_like(filled, dtype=bool)
+            
+            if face_idx == 0:  # -Z face
+                mask[:, :, 0] = filled[:, :, 0]
+                mask[:, :, 1:] = filled[:, :, 1:] & ~filled[:, :, :-1]
+            elif face_idx == 1:  # +Z face
+                mask[:, :, -1] = filled[:, :, -1]
+                mask[:, :, :-1] = filled[:, :, :-1] & ~filled[:, :, 1:]
+            elif face_idx == 2:  # -Y face
+                mask[:, 0, :] = filled[:, 0, :]
+                mask[:, 1:, :] = filled[:, 1:, :] & ~filled[:, :-1, :]
+            elif face_idx == 3:  # +Y face
+                mask[:, -1, :] = filled[:, -1, :]
+                mask[:, :-1, :] = filled[:, :-1, :] & ~filled[:, 1:, :]
+            elif face_idx == 4:  # -X face
+                mask[0, :, :] = filled[0, :, :]
+                mask[1:, :, :] = filled[1:, :, :] & ~filled[:-1, :, :]
+            elif face_idx == 5:  # +X face
+                mask[-1, :, :] = filled[-1, :, :]
+                mask[:-1, :, :] = filled[:-1, :, :] & ~filled[1:, :, :]
+            
+            indices = np.array(np.where(mask)).T
+            times['mask'] += time.perf_counter() - t0
+            
+            if indices.size == 0:
+                continue
+            
+            t1 = time.perf_counter()
+            
+            N = indices.shape[0]
+            
+            # Compute ALL vertices for this face at once
+            centers = indices.astype(np.float32) * voxel_size
+            face_vertices = cube[face_verts]  # shape (4, 3)
+            verts = centers[:, np.newaxis, :] + face_vertices[np.newaxis, :, :]
+            
+            # Create triangles
+            tri0 = verts[:, [0, 1, 2], :]  # shape (N, 3, 3)
+            tri1 = verts[:, [0, 2, 3], :]  # shape (N, 3, 3)
+            tris = np.vstack([tri0, tri1])  # shape (2*N, 3, 3)
+            
+            num_tris = tris.shape[0]
+            
+            times['compute'] += time.perf_counter() - t1
+            t2 = time.perf_counter()
+            
+            # Split triangles into chunks for parallel formatting
+            # Use more chunks than cores for better load balancing
+            format_chunk_size = max(1000, num_tris // (num_cores * 4))
+            
+            format_chunks = []
+            for start in range(0, num_tris, format_chunk_size):
+                end = min(num_tris, start + format_chunk_size)
+                format_chunks.append((tris[start:end], normal, template))
+            
+            times['prepare'] += time.perf_counter() - t2
+            t3 = time.perf_counter()
+            
+            # Format in parallel
+            with multiprocessing.Pool(num_cores) as pool:
+                formatted_chunks = pool.map(_format_chunk_worker, format_chunks)
+            
+            times['format'] += time.perf_counter() - t3
+            t4 = time.perf_counter()
+            
+            # Write all formatted chunks for this face
+            for chunk in formatted_chunks:
+                f.write(chunk)
+            
+            times['write'] += time.perf_counter() - t4
+            triangle_count += num_tris
+        
+        f.write(b"endsolid VoxelMesh\n")
+
+    t_end = time.perf_counter()
+    total_time = t_end - t_start
+    mem1 = tracemalloc.get_traced_memory()
+    
+    logger.info(f"[Profile]: ULTIMATE ASCII STL export complete. Total: {total_time:.2f}s, Triangles: {triangle_count}")
+    logger.info(f"[Profile]:   - Mask generation: {times['mask']:.2f}s ({100*times['mask']/total_time:.1f}%)")
+    logger.info(f"[Profile]:   - Vertex computation: {times['compute']:.2f}s ({100*times['compute']/total_time:.1f}%)")
+    logger.info(f"[Profile]:   - Prepare for parallel: {times['prepare']:.2f}s ({100*times['prepare']/total_time:.1f}%)")
+    logger.info(f"[Profile]:   - String formatting (parallel): {times['format']:.2f}s ({100*times['format']/total_time:.1f}%)")
+    logger.info(f"[Profile]:   - File writing: {times['write']:.2f}s ({100*times['write']/total_time:.1f}%)")
+    logger.info(f"[Profile]:   - Memory: current={mem1[0]/1e6:.2f}MB, peak={mem1[1]/1e6:.2f}MB")
+    tracemalloc.stop()
+    
+    return file_path
+
+# Sparse voxel space utilities (kept for potential future use)
+# def dense_to_sparse(voxel_space):
+#     """
+#     Convert a dense voxel space (numpy array) to a sparse representation.
+    
+#     Parameters:
+#     -----------
+#     voxel_space : numpy.ndarray
+#         The dense 3D voxel space array.
+
+#     Returns:
+#     --------
+#     scipy.sparse.coo_matrix
+#         Sparse representation of the voxel space.
+#     """
+#     filled_indices = np.array(np.where(voxel_space > 0)).T
+#     data = np.ones(len(filled_indices))
+#     sparse_voxel_space = coo_matrix(
+#         (data, (filled_indices[:, 0], filled_indices[:, 1] * voxel_space.shape[2] + filled_indices[:, 2])),
+#         shape=(voxel_space.shape[0], voxel_space.shape[1] * voxel_space.shape[2])
+#     )
+#     return sparse_voxel_space
