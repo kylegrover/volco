@@ -132,5 +132,10 @@ if __name__ == "__main__":
         sim_config_path=None if sim_config is not None else options.sim
     )
     
-    # Export STL
-    output.export_mesh_to_stl()
+
+    # Export voxel data if requested
+    if options.export_voxels:
+        output.export_voxel_data()
+    else:
+        # Export STL
+        output.export_mesh_to_stl()

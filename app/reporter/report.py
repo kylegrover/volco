@@ -136,6 +136,23 @@ class SimulationOutput:
 
         return export_mesh_to_stl(mesh, file_path, ascii_format=self._simulation.stl_ascii)
 
+    def export_voxel_data(self):
+        """
+        Export the voxel data to a compressed .npz file.
+        """
+        result_path = self._get_result_folder_path()
+        file_name = self._simulation.simulation_name + "_voxels.npz"
+        file_path = os.path.join(result_path, file_name)
+
+        if self.cropped_voxel_space is not None:
+            data_to_save = self.cropped_voxel_space
+        else:
+            logger.warning("[SimulationOutput]: Cropped voxel space not available, exporting full space.")
+            data_to_save = self.voxel_space.space
+
+        logger.info(f"[SimulationOutput]: Exporting voxel data to {file_path}")
+        np.savez_compressed(file_path, voxels=data_to_save, voxel_size=self._simulation.voxel_size)
+
     def visualize_mesh(self, mesh=None, visualizer='trimesh', color_scheme='cyan_blue'):
         """
         Create a 3D visualization of the mesh with coloring applied.
