@@ -266,20 +266,29 @@ def export_voxel_stl_streaming_binary(voxel_space, voxel_size, file_path):
         
         for face_idx, (face_verts, normal) in enumerate(faces):
             # Build surface mask for this face direction
+            # A face should be drawn if the current voxel is filled AND the neighbor in that direction is empty (or out of bounds)
             mask = np.zeros_like(filled, dtype=bool)
             
-            if face_idx == 0:  # -Z face
-                mask[:, :, :-1] = filled[:, :, :-1] & ~filled[:, :, 1:]
-            elif face_idx == 1:  # +Z face
+            if face_idx == 0:  # -Z face (faces negative Z direction)
+                # Draw face if filled AND (neighbor below is empty OR at bottom boundary)
+                mask[:, :, 0] = filled[:, :, 0]  # Bottom boundary always visible
                 mask[:, :, 1:] = filled[:, :, 1:] & ~filled[:, :, :-1]
-            elif face_idx == 2:  # -Y face
-                mask[:, :-1, :] = filled[:, :-1, :] & ~filled[:, 1:, :]
-            elif face_idx == 3:  # +Y face
+            elif face_idx == 1:  # +Z face (faces positive Z direction)
+                # Draw face if filled AND (neighbor above is empty OR at top boundary)
+                mask[:, :, -1] = filled[:, :, -1]  # Top boundary always visible
+                mask[:, :, :-1] = filled[:, :, :-1] & ~filled[:, :, 1:]
+            elif face_idx == 2:  # -Y face (faces negative Y direction)
+                mask[:, 0, :] = filled[:, 0, :]  # Front boundary always visible
                 mask[:, 1:, :] = filled[:, 1:, :] & ~filled[:, :-1, :]
-            elif face_idx == 4:  # -X face
-                mask[:-1, :, :] = filled[:-1, :, :] & ~filled[1:, :, :]
-            elif face_idx == 5:  # +X face
+            elif face_idx == 3:  # +Y face (faces positive Y direction)
+                mask[:, -1, :] = filled[:, -1, :]  # Back boundary always visible
+                mask[:, :-1, :] = filled[:, :-1, :] & ~filled[:, 1:, :]
+            elif face_idx == 4:  # -X face (faces negative X direction)
+                mask[0, :, :] = filled[0, :, :]  # Left boundary always visible
                 mask[1:, :, :] = filled[1:, :, :] & ~filled[:-1, :, :]
+            elif face_idx == 5:  # +X face (faces positive X direction)
+                mask[-1, :, :] = filled[-1, :, :]  # Right boundary always visible
+                mask[:-1, :, :] = filled[:-1, :, :] & ~filled[1:, :, :]
             
             # Get indices of voxels with visible faces
             indices = np.array(np.where(mask)).T
