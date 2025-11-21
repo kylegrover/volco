@@ -394,9 +394,14 @@ def generate_and_export_mesh(voxel_space, voxel_size, file_path, binary=True):
         return None
 
 def _format_chunk_worker(args):
-    """Worker function for parallel string formatting."""
+    """Worker function for parallel string formatting with internal profiling."""
+    import time
+    t0 = time.perf_counter()
+    
     tris, normal, template = args
     nx, ny, nz = normal
+    
+    t1 = time.perf_counter()
     result = []
     for tri in tris:
         v0, v1, v2 = tri
@@ -404,7 +409,19 @@ def _format_chunk_worker(args):
                                   v0[0], v0[1], v0[2],
                                   v1[0], v1[1], v1[2],
                                   v2[0], v2[1], v2[2]))
-    return b''.join(result)
+    
+    t2 = time.perf_counter()
+    joined = b''.join(result)
+    t3 = time.perf_counter()
+    
+    # Return timing info for analysis
+    return {
+        'data': joined,
+        'setup_time': t1 - t0,
+        'format_time': t2 - t1,
+        'join_time': t3 - t2,
+        'count': len(tris)
+    }
 
 
 def export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path):
@@ -426,32 +443,36 @@ def export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path):
     str
         The path to the exported STL file
     """
-    logger.info("[Profile]: Starting ULTIMATE streaming ASCII STL export (face-by-face + parallel)")
+
+    logger.info("[Profile]: Starting DEEP PROFILING ASCII STL export")
     tracemalloc.start()
     t_start = time.perf_counter()
     
-    times = {'mask': 0, 'compute': 0, 'prepare': 0, 'format': 0, 'write': 0}
+    times = {
+        'mask': 0, 'compute': 0, 'prepare': 0, 
+        'pool_create': 0, 'pool_map': 0, 'pool_close': 0,
+        'write': 0
+    }
+    
+    worker_stats = {'setup': 0, 'format': 0, 'join': 0, 'calls': 0}
 
-    # Cube vertices (relative to center)
     cube = voxel_size * np.array([
         [-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [0.5, 0.5, -0.5], [-0.5, 0.5, -0.5],
         [-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5]
     ], dtype=np.float32)
     
-    # Face definitions: (vertex indices, normal vector)
     faces = [
-        ([0, 3, 2, 1], np.array([0, 0, -1], dtype=np.float32)),  # -Z
-        ([4, 5, 6, 7], np.array([0, 0, 1], dtype=np.float32)),   # +Z
-        ([0, 1, 5, 4], np.array([0, -1, 0], dtype=np.float32)),  # -Y
-        ([2, 3, 7, 6], np.array([0, 1, 0], dtype=np.float32)),   # +Y
-        ([0, 4, 7, 3], np.array([-1, 0, 0], dtype=np.float32)),  # -X
-        ([1, 2, 6, 5], np.array([1, 0, 0], dtype=np.float32))    # +X
+        ([0, 3, 2, 1], np.array([0, 0, -1], dtype=np.float32)),
+        ([4, 5, 6, 7], np.array([0, 0, 1], dtype=np.float32)),
+        ([0, 1, 5, 4], np.array([0, -1, 0], dtype=np.float32)),
+        ([2, 3, 7, 6], np.array([0, 1, 0], dtype=np.float32)),
+        ([0, 4, 7, 3], np.array([-1, 0, 0], dtype=np.float32)),
+        ([1, 2, 6, 5], np.array([1, 0, 0], dtype=np.float32))
     ]
 
     filled = (voxel_space > 0)
     triangle_count = 0
     
-    # Template for formatting
     template = (
         b"  facet normal %.6e %.6e %.6e\n"
         b"    outer loop\n"
@@ -462,100 +483,117 @@ def export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path):
         b"  endfacet\n"
     )
     
-    # Get CPU count for parallel formatting
     num_cores = multiprocessing.cpu_count()
     
-    with open(file_path, 'wb', buffering=1048576) as f:  # 1MB write buffer
-        f.write(b"solid VoxelMesh\n")
-        
-        for face_idx, (face_verts, normal) in enumerate(faces):
-            t0 = time.perf_counter()
+    # CRITICAL: Create pool ONCE outside the loop
+    t_pool_start = time.perf_counter()
+    pool = multiprocessing.Pool(num_cores)
+    times['pool_create'] = time.perf_counter() - t_pool_start
+    logger.info(f"[Profile]: Created process pool with {num_cores} workers in {times['pool_create']:.3f}s")
+    
+    try:
+        with open(file_path, 'wb', buffering=1048576) as f:
+            f.write(b"solid VoxelMesh\n")
             
-            # Build surface mask - IDENTICAL to binary version
-            mask = np.zeros_like(filled, dtype=bool)
+            for face_idx, (face_verts, normal) in enumerate(faces):
+                t0 = time.perf_counter()
+                
+                mask = np.zeros_like(filled, dtype=bool)
+                
+                if face_idx == 0:
+                    mask[:, :, 0] = filled[:, :, 0]
+                    mask[:, :, 1:] = filled[:, :, 1:] & ~filled[:, :, :-1]
+                elif face_idx == 1:
+                    mask[:, :, -1] = filled[:, :, -1]
+                    mask[:, :, :-1] = filled[:, :, :-1] & ~filled[:, :, 1:]
+                elif face_idx == 2:
+                    mask[:, 0, :] = filled[:, 0, :]
+                    mask[:, 1:, :] = filled[:, 1:, :] & ~filled[:, :-1, :]
+                elif face_idx == 3:
+                    mask[:, -1, :] = filled[:, -1, :]
+                    mask[:, :-1, :] = filled[:, :-1, :] & ~filled[:, 1:, :]
+                elif face_idx == 4:
+                    mask[0, :, :] = filled[0, :, :]
+                    mask[1:, :, :] = filled[1:, :, :] & ~filled[:-1, :, :]
+                elif face_idx == 5:
+                    mask[-1, :, :] = filled[-1, :, :]
+                    mask[:-1, :, :] = filled[:-1, :, :] & ~filled[1:, :, :]
+                
+                indices = np.array(np.where(mask)).T
+                times['mask'] += time.perf_counter() - t0
+                
+                if indices.size == 0:
+                    continue
+                
+                t1 = time.perf_counter()
+                
+                N = indices.shape[0]
+                centers = indices.astype(np.float32) * voxel_size
+                face_vertices = cube[face_verts]
+                verts = centers[:, np.newaxis, :] + face_vertices[np.newaxis, :, :]
+                
+                tri0 = verts[:, [0, 1, 2], :]
+                tri1 = verts[:, [0, 2, 3], :]
+                tris = np.vstack([tri0, tri1])
+                num_tris = tris.shape[0]
+                
+                times['compute'] += time.perf_counter() - t1
+                t2 = time.perf_counter()
+                
+                # Larger chunks for less overhead
+                format_chunk_size = max(5000, num_tris // (num_cores * 2))
+                
+                format_chunks = []
+                for start in range(0, num_tris, format_chunk_size):
+                    end = min(num_tris, start + format_chunk_size)
+                    format_chunks.append((tris[start:end], normal, template))
+                
+                times['prepare'] += time.perf_counter() - t2
+                t3 = time.perf_counter()
+                
+                # Use existing pool
+                results = pool.map(_format_chunk_worker, format_chunks)
+                
+                times['pool_map'] += time.perf_counter() - t3
+                t4 = time.perf_counter()
+                
+                # Accumulate worker stats
+                for result in results:
+                    worker_stats['setup'] += result['setup_time']
+                    worker_stats['format'] += result['format_time']
+                    worker_stats['join'] += result['join_time']
+                    worker_stats['calls'] += 1
+                    f.write(result['data'])
+                
+                times['write'] += time.perf_counter() - t4
+                triangle_count += num_tris
+                
+                logger.info(f"[Profile]: Face {face_idx}: {num_tris} triangles, {len(format_chunks)} chunks")
             
-            if face_idx == 0:  # -Z face
-                mask[:, :, 0] = filled[:, :, 0]
-                mask[:, :, 1:] = filled[:, :, 1:] & ~filled[:, :, :-1]
-            elif face_idx == 1:  # +Z face
-                mask[:, :, -1] = filled[:, :, -1]
-                mask[:, :, :-1] = filled[:, :, :-1] & ~filled[:, :, 1:]
-            elif face_idx == 2:  # -Y face
-                mask[:, 0, :] = filled[:, 0, :]
-                mask[:, 1:, :] = filled[:, 1:, :] & ~filled[:, :-1, :]
-            elif face_idx == 3:  # +Y face
-                mask[:, -1, :] = filled[:, -1, :]
-                mask[:, :-1, :] = filled[:, :-1, :] & ~filled[:, 1:, :]
-            elif face_idx == 4:  # -X face
-                mask[0, :, :] = filled[0, :, :]
-                mask[1:, :, :] = filled[1:, :, :] & ~filled[:-1, :, :]
-            elif face_idx == 5:  # +X face
-                mask[-1, :, :] = filled[-1, :, :]
-                mask[:-1, :, :] = filled[:-1, :, :] & ~filled[1:, :, :]
-            
-            indices = np.array(np.where(mask)).T
-            times['mask'] += time.perf_counter() - t0
-            
-            if indices.size == 0:
-                continue
-            
-            t1 = time.perf_counter()
-            
-            N = indices.shape[0]
-            
-            # Compute ALL vertices for this face at once
-            centers = indices.astype(np.float32) * voxel_size
-            face_vertices = cube[face_verts]  # shape (4, 3)
-            verts = centers[:, np.newaxis, :] + face_vertices[np.newaxis, :, :]
-            
-            # Create triangles
-            tri0 = verts[:, [0, 1, 2], :]  # shape (N, 3, 3)
-            tri1 = verts[:, [0, 2, 3], :]  # shape (N, 3, 3)
-            tris = np.vstack([tri0, tri1])  # shape (2*N, 3, 3)
-            
-            num_tris = tris.shape[0]
-            
-            times['compute'] += time.perf_counter() - t1
-            t2 = time.perf_counter()
-            
-            # Split triangles into chunks for parallel formatting
-            # Use more chunks than cores for better load balancing
-            format_chunk_size = max(1000, num_tris // (num_cores * 4))
-            
-            format_chunks = []
-            for start in range(0, num_tris, format_chunk_size):
-                end = min(num_tris, start + format_chunk_size)
-                format_chunks.append((tris[start:end], normal, template))
-            
-            times['prepare'] += time.perf_counter() - t2
-            t3 = time.perf_counter()
-            
-            # Format in parallel
-            with multiprocessing.Pool(num_cores) as pool:
-                formatted_chunks = pool.map(_format_chunk_worker, format_chunks)
-            
-            times['format'] += time.perf_counter() - t3
-            t4 = time.perf_counter()
-            
-            # Write all formatted chunks for this face
-            for chunk in formatted_chunks:
-                f.write(chunk)
-            
-            times['write'] += time.perf_counter() - t4
-            triangle_count += num_tris
-        
-        f.write(b"endsolid VoxelMesh\n")
-
+            f.write(b"endsolid VoxelMesh\n")
+    
+    finally:
+        t_close_start = time.perf_counter()
+        pool.close()
+        pool.join()
+        times['pool_close'] = time.perf_counter() - t_close_start
+    
     t_end = time.perf_counter()
     total_time = t_end - t_start
     mem1 = tracemalloc.get_traced_memory()
     
-    logger.info(f"[Profile]: ULTIMATE ASCII STL export complete. Total: {total_time:.2f}s, Triangles: {triangle_count}")
+    logger.info(f"[Profile]: PROFILED ASCII STL export complete. Total: {total_time:.2f}s, Triangles: {triangle_count}")
     logger.info(f"[Profile]:   - Mask generation: {times['mask']:.2f}s ({100*times['mask']/total_time:.1f}%)")
     logger.info(f"[Profile]:   - Vertex computation: {times['compute']:.2f}s ({100*times['compute']/total_time:.1f}%)")
-    logger.info(f"[Profile]:   - Prepare for parallel: {times['prepare']:.2f}s ({100*times['prepare']/total_time:.1f}%)")
-    logger.info(f"[Profile]:   - String formatting (parallel): {times['format']:.2f}s ({100*times['format']/total_time:.1f}%)")
+    logger.info(f"[Profile]:   - Prepare chunks: {times['prepare']:.2f}s ({100*times['prepare']/total_time:.1f}%)")
+    logger.info(f"[Profile]:   - Pool creation: {times['pool_create']:.2f}s ({100*times['pool_create']/total_time:.1f}%)")
+    logger.info(f"[Profile]:   - Pool.map calls: {times['pool_map']:.2f}s ({100*times['pool_map']/total_time:.1f}%)")
+    logger.info(f"[Profile]:   - Pool cleanup: {times['pool_close']:.2f}s ({100*times['pool_close']/total_time:.1f}%)")
     logger.info(f"[Profile]:   - File writing: {times['write']:.2f}s ({100*times['write']/total_time:.1f}%)")
+    logger.info(f"[Profile]: Worker stats ({worker_stats['calls']} chunks):")
+    logger.info(f"[Profile]:   - Setup overhead: {worker_stats['setup']:.2f}s")
+    logger.info(f"[Profile]:   - Format loops: {worker_stats['format']:.2f}s")
+    logger.info(f"[Profile]:   - Join operations: {worker_stats['join']:.2f}s")
     logger.info(f"[Profile]:   - Memory: current={mem1[0]/1e6:.2f}MB, peak={mem1[1]/1e6:.2f}MB")
     tracemalloc.stop()
     
