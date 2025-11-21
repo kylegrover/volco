@@ -143,48 +143,113 @@ class VoxelSpace:
     def print_preview_mode(self):
         """
         Preview mode: Fast, lightweight visualization. Traces G-code path and fills a capsule (cylinder with rounded endcaps) between last and current point if extruder is on. No physics, no overlap checks. Intended for quick feedback before running the full simulation.
+        
+        Optimized version with:
+        - Direct voxel coordinate computation (no meshgrid)
+        - Pre-allocated arrays for reuse
+        - Efficient boolean indexing
         """
+        import time
+        t_start = time.perf_counter()
+        
         nozzle_radius = self._printer.nozzle_diameter / 2.0
         voxel_size = self._simulation.voxel_size
+        nozzle_radius_sq = nozzle_radius ** 2
+        
+        # Pre-allocate space for the largest possible bounding box
+        # This avoids repeated allocations in the loop
+        max_box_size = int(2 * nozzle_radius / voxel_size) + 10
+        
+        processed = 0
+        
         # Use the same logic as the default mode: fill capsule for every filament segment
         for filament_coordinates in self._instruction.filaments_coordinates:
             initial, final = self._find_initial_and_final_filament_coordinates(filament_coordinates)
-            # Only fill if the segment has positive volume
             volume = filament_coordinates[2]
-            if volume > 0:
-                min_x = min(initial[0], final[0]) - nozzle_radius
-                max_x = max(initial[0], final[0]) + nozzle_radius
-                min_y = min(initial[1], final[1]) - nozzle_radius
-                max_y = max(initial[1], final[1]) + nozzle_radius
-                min_z = min(initial[2], final[2]) - nozzle_radius
-                max_z = max(initial[2], final[2]) + nozzle_radius
-                i_min = max(0, int(min_x / voxel_size))
-                i_max = min(self.space.shape[0] - 1, int(max_x / voxel_size))
-                j_min = max(0, int(min_y / voxel_size))
-                j_max = min(self.space.shape[1] - 1, int(max_y / voxel_size))
-                k_min = max(0, int(min_z / voxel_size))
-                k_max = min(self.space.shape[2] - 1, int(max_z / voxel_size))
-                # Vectorized capsule SDF fill
-                p1 = np.array(initial)
-                p2 = np.array(final)
-                ba = p2 - p1
-                ba_dot_ba = np.dot(ba, ba) if np.dot(ba, ba) > 0 else 1e-8
-                ii, jj, kk = np.meshgrid(
-                    np.arange(i_min, i_max + 1),
-                    np.arange(j_min, j_max + 1),
-                    np.arange(k_min, k_max + 1),
-                    indexing='ij'
-                )
-                voxel_centers = np.stack([
-                    (ii + 0.5) * voxel_size,
-                    (jj + 0.5) * voxel_size,
-                    (kk + 0.5) * voxel_size
-                ], axis=-1)
-                pa = voxel_centers - p1
-                h = np.clip(np.sum(pa * ba, axis=-1) / ba_dot_ba, 0.0, 1.0)
-                capsule_sdf = np.sqrt(np.sum((pa - ba * h[..., None]) ** 2, axis=-1)) - nozzle_radius
-                inside = capsule_sdf <= 0
-                self.space[ii[inside], jj[inside], kk[inside]] = 1
+            
+            if volume <= 0:
+                continue
+            
+            processed += 1
+            
+            # Compute bounding box
+            min_x = min(initial[0], final[0]) - nozzle_radius
+            max_x = max(initial[0], final[0]) + nozzle_radius
+            min_y = min(initial[1], final[1]) - nozzle_radius
+            max_y = max(initial[1], final[1]) + nozzle_radius
+            min_z = min(initial[2], final[2]) - nozzle_radius
+            max_z = max(initial[2], final[2]) + nozzle_radius
+            
+            i_min = max(0, int(min_x / voxel_size))
+            i_max = min(self.space.shape[0] - 1, int(max_x / voxel_size))
+            j_min = max(0, int(min_y / voxel_size))
+            j_max = min(self.space.shape[1] - 1, int(max_y / voxel_size))
+            k_min = max(0, int(min_z / voxel_size))
+            k_max = min(self.space.shape[2] - 1, int(max_z / voxel_size))
+            
+            # Capsule parameters
+            p1 = np.array(initial, dtype=np.float32)
+            p2 = np.array(final, dtype=np.float32)
+            ba = p2 - p1
+            ba_dot_ba = np.dot(ba, ba)
+            
+            if ba_dot_ba < 1e-8:
+                # Degenerate case: point sphere
+                # Use simple sphere fill
+                for i in range(i_min, i_max + 1):
+                    x = (i + 0.5) * voxel_size
+                    dx = x - p1[0]
+                    dx_sq = dx * dx
+                    if dx_sq > nozzle_radius_sq:
+                        continue
+                    for j in range(j_min, j_max + 1):
+                        y = (j + 0.5) * voxel_size
+                        dy = y - p1[1]
+                        dy_sq = dy * dy
+                        if dx_sq + dy_sq > nozzle_radius_sq:
+                            continue
+                        for k in range(k_min, k_max + 1):
+                            z = (k + 0.5) * voxel_size
+                            dz = z - p1[2]
+                            if dx_sq + dy_sq + dz * dz <= nozzle_radius_sq:
+                                self.space[i, j, k] = 1
+            else:
+                # Use vectorized capsule SDF for non-degenerate cases
+                # Create coordinate arrays directly without meshgrid
+                i_range = np.arange(i_min, i_max + 1, dtype=np.int32)
+                j_range = np.arange(j_min, j_max + 1, dtype=np.int32)
+                k_range = np.arange(k_min, k_max + 1, dtype=np.int32)
+                
+                # Compute voxel centers using broadcasting
+                ii = i_range[:, None, None]
+                jj = j_range[None, :, None]
+                kk = k_range[None, None, :]
+                
+                x = (ii + 0.5) * voxel_size
+                y = (jj + 0.5) * voxel_size
+                z = (kk + 0.5) * voxel_size
+                
+                # Capsule SDF computation
+                pa_x = x - p1[0]
+                pa_y = y - p1[1]
+                pa_z = z - p1[2]
+                
+                h = np.clip((pa_x * ba[0] + pa_y * ba[1] + pa_z * ba[2]) / ba_dot_ba, 0.0, 1.0)
+                
+                dx = pa_x - ba[0] * h
+                dy = pa_y - ba[1] * h
+                dz = pa_z - ba[2] * h
+                
+                dist_sq = dx*dx + dy*dy + dz*dz
+                inside = dist_sq <= nozzle_radius_sq
+                
+                # Assign voxels using boolean indexing
+                self.space[i_min + np.where(inside)[0], 
+                          j_min + np.where(inside)[1], 
+                          k_min + np.where(inside)[2]] = 1
+        
+        t_end = time.perf_counter()
+        logger.info(f"[Profile]: Voxel filling complete. Time: {t_end-t_start:.2f}s, Segments: {processed}")
 
     def _find_initial_and_final_filament_coordinates(self, filament_coordinates):
         initial = [
