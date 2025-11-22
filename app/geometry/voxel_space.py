@@ -99,7 +99,7 @@ class VoxelSpace:
         if hasattr(self._simulation, "preview_mode") and self._simulation.preview_mode:
             self.print_preview_mode()
             return
-
+        filament_coordinates_count = len(self._instruction.filaments_coordinates)
         number_printed_filaments = 0
         number_printed_layers = 0
         initial_z_coordinate = 0.0
@@ -138,6 +138,10 @@ class VoxelSpace:
                 direction_vector=direction_vector,
                 filament_initial_coordinates=initial_coordinate,
                 volumes=volumes,
+            )
+            logger.info(
+                f"Deposited step {number_printed_filaments}/{filament_coordinates_count} (~layer: {number_printed_layers}): "
+                f"from {initial_coordinate} to {final_coordinate}, "
             )
 
     def print_preview_mode(self):
@@ -329,9 +333,9 @@ class VoxelSpace:
                 voxel_size=self._simulation.voxel_size,
             )
 
-            logger.info(
-                f"Depositing filament: step = {step_n + 1}/{number_simulation_steps}"
-            )
+            # logger.info(
+            #     f"Depositing filament: step = {step_n + 1}/{number_simulation_steps}"
+            # )
 
             # Pass the VoxelSpace instance so sphere code can update the
             # running counter and expand the `.space` ndarray in-place.
