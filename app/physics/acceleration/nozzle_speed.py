@@ -53,7 +53,12 @@ class NozzleSpeed(Speed):
         )
 
     def _find_total_time_and_speed_profile(self):
-        if self.target_speed < self.threshold_speed:
+        if self.target_speed == 0:
+            self._total_time = 0.0
+            self._speed_profile = FlatSpeedProfile()
+            return
+
+        if self.acceleration == 0 or self.target_speed < self.threshold_speed:
             self._total_time = self.travel_length / self.target_speed
             self._speed_profile = FlatSpeedProfile()
             return

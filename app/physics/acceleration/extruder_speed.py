@@ -57,7 +57,12 @@ class ExtruderSpeed(Speed):
         )
 
     def _find_target_speed_and_speed_profile(self):
-        if self.travel_length / self.total_time < self.threshold_speed:
+        if self.total_time == 0:
+            self._speed_profile = FlatSpeedProfile()
+            self._target_speed = 0.0
+            return
+
+        if self.acceleration == 0 or self.travel_length / self.total_time < self.threshold_speed:
             self._speed_profile = FlatSpeedProfile()
             self._target_speed = self.travel_length / self.total_time
             return

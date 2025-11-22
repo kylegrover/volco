@@ -24,6 +24,9 @@ class GeometryMath:
 
         norm = math.sqrt(norm)
 
+        if norm == 0:
+            return [0.0 for _ in vec]
+
         return [pi / norm for pi in vec]
 
     @staticmethod

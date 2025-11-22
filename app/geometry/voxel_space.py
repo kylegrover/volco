@@ -269,6 +269,9 @@ class VoxelSpace:
             round(filament_length / self._simulation.step_size)
         )
 
+        if number_simulation_steps == 0:
+            number_simulation_steps = 1
+
         step_size = filament_length / number_simulation_steps
 
         return number_simulation_steps, step_size
