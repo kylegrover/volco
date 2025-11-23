@@ -8,6 +8,7 @@ from app.geometry.sphere import Sphere
 from app.instructions.instruction import Instruction
 from app.geometry.geometry_math import GeometryMath
 from app.physics.volume import Volume
+from app.physics.solver import PhysicsSolver
 
 
 logger = logging.getLogger(__name__)
@@ -94,6 +95,16 @@ class VoxelSpace:
         # reset the running counter when allocating space
         self._filled_voxels_count = 0
 
+        # Initialize Physics Solver if enabled
+        if self._simulation.physics_enabled:
+            self.physics_solver = PhysicsSolver(
+                shape=self.space.shape,
+                voxel_size=self._simulation.voxel_size,
+                config=self._simulation
+            )
+        else:
+            self.physics_solver = None
+
     def print(self):
         # Check for preview mode in simulation config
         if hasattr(self._simulation, "preview_mode") and self._simulation.preview_mode:
@@ -138,11 +149,21 @@ class VoxelSpace:
                 direction_vector=direction_vector,
                 filament_initial_coordinates=initial_coordinate,
                 volumes=volumes,
+                printing_speed=printing_speed,
             )
             logger.info(
                 f"Deposited step {number_printed_filaments}/{filament_coordinates_count} (~layer: {number_printed_layers}): "
                 f"from {initial_coordinate} to {final_coordinate}, "
             )
+        
+        # Final sync for physics mode
+        if self.physics_solver:
+            logger.info("Finalizing physics simulation...")
+            # Run a few extra steps to let things settle?
+            # self.physics_solver.step(1.0) 
+            self.space = self.physics_solver.get_voxel_grid()
+            self._filled_voxels_count = np.count_nonzero(self.space)
+            logger.info(f"Physics simulation complete. Filled voxels: {self._filled_voxels_count}")
 
     def print_preview_mode(self):
         """
@@ -287,6 +308,7 @@ class VoxelSpace:
         direction_vector,
         filament_initial_coordinates,
         volumes,
+        printing_speed=None,
     ):
         # Use the running counter to compute total deposited volume quickly
         total_deposited_volume = (
@@ -333,24 +355,60 @@ class VoxelSpace:
                 voxel_size=self._simulation.voxel_size,
             )
 
-            # logger.info(
-            #     f"Depositing filament: step = {step_n + 1}/{number_simulation_steps}"
-            # )
+            if self.physics_solver:
+                # Physics Mode
+                
+                # 1. Ensure Grid Size
+                injection_radius = self._printer.nozzle_diameter / 2.0
+                # This expands self.space if needed
+                sphere.deform_voxel_space_for_big_spheres(self, injection_radius)
+                
+                # Sync solver shape if needed
+                if self.space.shape != self.physics_solver.shape:
+                    self.physics_solver.expand(self.space.shape, (0, 0, 0))
+                
+                # 2. Add Material
+                dt = step_size / printing_speed if printing_speed and printing_speed > 0 else 0.0
+                
+                # Use a default extrusion temp if not specified (e.g. 220C)
+                # Ideally this should come from printer config or gcode
+                extrusion_temp = 220.0 
+                
+                self.physics_solver.add_material(
+                    center=centre_coordinates,
+                    radius=injection_radius,
+                    amount=sphere_volume,
+                    temperature=extrusion_temp
+                )
+                
+                # 3. Step Physics
+                if dt > 0:
+                    self.physics_solver.step(dt)
+                
+                # Update filled voxels count (approximate, or sync later)
+                # For now, we don't update _filled_voxels_count accurately in physics mode
+                # until we sync back.
+                
+            else:
+                # Geometric Mode
+                # logger.info(
+                #     f"Depositing filament: step = {step_n + 1}/{number_simulation_steps}"
+                # )
 
-            # Pass the VoxelSpace instance so sphere code can update the
-            # running counter and expand the `.space` ndarray in-place.
-            voxel_space_out = sphere.deposit_sphere(
-                voxel_space=self,
-                nozzle_height=nozzle_height,
-                sphere_volume=sphere_volume,
-                voxel_space_target_volume=volume_target,
-                solver_tolerance=self._simulation.solver_tolerance,
-                radius_increment=self._simulation.radius_increment,
-            )
+                # Pass the VoxelSpace instance so sphere code can update the
+                # running counter and expand the `.space` ndarray in-place.
+                voxel_space_out = sphere.deposit_sphere(
+                    voxel_space=self,
+                    nozzle_height=nozzle_height,
+                    sphere_volume=sphere_volume,
+                    voxel_space_target_volume=volume_target,
+                    solver_tolerance=self._simulation.solver_tolerance,
+                    radius_increment=self._simulation.radius_increment,
+                )
 
-            # Ensure our internal `.space` and counter reflect any mutations
-            # returned by the sphere logic (voxel_space_out is a VoxelSpace)
-            if hasattr(voxel_space_out, "space"):
-                self.space = voxel_space_out.space
-            if hasattr(voxel_space_out, "_filled_voxels_count"):
-                self._filled_voxels_count = voxel_space_out._filled_voxels_count
+                # Ensure our internal `.space` and counter reflect any mutations
+                # returned by the sphere logic (voxel_space_out is a VoxelSpace)
+                if hasattr(voxel_space_out, "space"):
+                    self.space = voxel_space_out.space
+                if hasattr(voxel_space_out, "_filled_voxels_count"):
+                    self._filled_voxels_count = voxel_space_out._filled_voxels_count

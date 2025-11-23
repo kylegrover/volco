@@ -56,3 +56,13 @@ class Simulation:
 
         # Preview mode (fast, lightweight visualization)
         self.preview_mode = config.get("preview_mode", False)
+
+        # Physics Simulation Settings
+        self.physics_enabled = config.get("physics_enabled", False)
+        self.ambient_temperature = config.get("ambient_temperature", 25.0)
+        self.solidification_temp = config.get("solidification_temp", 200.0)
+        self.cooling_rate = config.get("cooling_rate", 1.0)
+        self.viscosity_molten = config.get("viscosity_molten", 1.0)
+        self.viscosity_solid = config.get("viscosity_solid", 10000.0)
+        self.gravity_factor = config.get("gravity_factor", 0.1)
+        self.spread_factor = config.get("spread_factor", 0.05)
