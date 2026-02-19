@@ -1,8 +1,36 @@
 import math
-import numpy as np
+import numpy as _numpy_cpu  # plain NumPy kept for Numba interop (must be CPU-side)
 
+from app.array_backend import np
 from app.geometry.geometry_math import GeometryMath
 from app.solvers.bisection_method import BisectionMethod
+
+# ---------------------------------------------------------------------------
+# Optional Numba JIT for the hot distance-computation loop.
+# When Numba is available the per-voxel distance check is compiled and runs
+# in parallel across CPU threads (nopython=True, parallel=True).  When Numba
+# is not installed the pure-NumPy vectorised fallback is used instead.
+# ---------------------------------------------------------------------------
+try:
+    import numba as _numba
+
+    @_numba.jit(nopython=True, parallel=True)
+    def _jit_compute_fill_mask(xi, yj, zk, cx, cy, cz, voxel_size, radius):
+        """Return a boolean mask: True where voxel centre is within *radius*."""
+        n = xi.shape[0]
+        mask = _numpy_cpu.empty(n, dtype=_numpy_cpu.bool_)
+        half = voxel_size * 0.5
+        threshold_sq = (radius + voxel_size * 1e-8) ** 2
+        for i in _numba.prange(n):
+            dx = xi[i] * voxel_size + half - cx
+            dy = yj[i] * voxel_size + half - cy
+            dz = zk[i] * voxel_size + half - cz
+            mask[i] = dx * dx + dy * dy + dz * dz <= threshold_sq
+        return mask
+
+    _HAS_NUMBA = True
+except ImportError:
+    _HAS_NUMBA = False
 
 
 class Sphere:
@@ -44,41 +72,56 @@ class Sphere:
         is_voxel_space = hasattr(voxel_space_obj, "space")
         space = voxel_space_obj.space if is_voxel_space else voxel_space_obj
 
-        empty_voxels = GeometryMath.find_empty_voxels_in_space(
+        # find_empty_voxels_in_space now returns raw index arrays directly from
+        # np.where, avoiding an expensive Python-list round-trip.
+        xi, yj, zk = GeometryMath.find_empty_voxels_in_space(
             space, lower_indexes, upper_indexes
         )
 
-        if not empty_voxels:
+        if xi.size == 0:
             return voxel_space_obj
 
-        # Convert to numpy array for vectorized operations
-        empty_voxels_np = np.array(empty_voxels)
-        # Calculate coordinates for all voxels at once
-        voxel_coords = self.voxel_size * (2 * (empty_voxels_np + 1) - 1) * 0.5
-        # Calculate distances to centre for all voxels
-        centre = np.array(self.centre_coordinates)
-        dists = np.linalg.norm(voxel_coords - centre, axis=1)
-        # Mask for voxels within radius
-        mask = dists <= radius + self.voxel_size * 1e-8
+        # Compute which of the empty voxels fall within the sphere radius.
+        cx, cy, cz = self.centre_coordinates
+        if _HAS_NUMBA:
+            # Use the JIT-compiled parallel kernel when Numba is available.
+            # Numba requires plain NumPy (CPU) arrays, so convert only when the
+            # active backend has placed them on device (e.g. CuPy).
+            if isinstance(xi, _numpy_cpu.ndarray):
+                xi_cpu, yj_cpu, zk_cpu = xi, yj, zk
+            else:
+                xi_cpu = _numpy_cpu.asarray(xi, dtype=_numpy_cpu.int64)
+                yj_cpu = _numpy_cpu.asarray(yj, dtype=_numpy_cpu.int64)
+                zk_cpu = _numpy_cpu.asarray(zk, dtype=_numpy_cpu.int64)
+            mask = _jit_compute_fill_mask(
+                xi_cpu, yj_cpu, zk_cpu,
+                float(cx), float(cy), float(cz),
+                float(self.voxel_size), float(radius),
+            )
+            # Bring mask back to device array if needed
+            mask = np.asarray(mask)
+        else:
+            # Vectorised NumPy/CuPy fallback.
+            half = self.voxel_size * 0.5
+            dx = xi * self.voxel_size + half - cx
+            dy = yj * self.voxel_size + half - cy
+            dz = zk * self.voxel_size + half - cz
+            mask = dx * dx + dy * dy + dz * dz <= (radius + self.voxel_size * 1e-8) ** 2
 
         if not np.any(mask):
             return voxel_space_obj
 
-        # Filter indices that should be filled
-        fill_indices = empty_voxels_np[mask]
-
-        # Advanced index assignment (vectorized)
-        xi = fill_indices[:, 0].astype(int)
-        yj = fill_indices[:, 1].astype(int)
-        zk = fill_indices[:, 2].astype(int)
+        xi_fill = xi[mask]
+        yj_fill = yj[mask]
+        zk_fill = zk[mask]
 
         # Before setting, count how many of these are actually zero (defensive)
-        current_vals = space[xi, yj, zk]
+        current_vals = space[xi_fill, yj_fill, zk_fill]
         new_mask = current_vals == 0
         n_new = int(np.count_nonzero(new_mask))
         if n_new > 0:
             # Assign into the ndarray `space` (in-place)
-            space[xi[new_mask], yj[new_mask], zk[new_mask]] = 1
+            space[xi_fill[new_mask], yj_fill[new_mask], zk_fill[new_mask]] = 1
             # Update running counter only when we were given a VoxelSpace object
             if is_voxel_space and hasattr(voxel_space_obj, "_filled_voxels_count"):
                 voxel_space_obj._filled_voxels_count += n_new

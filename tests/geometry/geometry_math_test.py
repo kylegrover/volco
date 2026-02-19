@@ -22,22 +22,26 @@ class TestFindEmptyVoxels:
     def test_should_return_an_empty_list(self):
         voxel_space = np.ones((10, 10, 10), dtype=np.int8)
 
-        empty_voxels = GeometryMath.find_empty_voxels_in_space(
+        xi, yj, zk = GeometryMath.find_empty_voxels_in_space(
             voxel_space, [0, 0, 0], [9, 9, 9]
         )
 
-        assert empty_voxels == []
+        assert xi.size == 0
+        assert yj.size == 0
+        assert zk.size == 0
 
     def test_should_return_a_list_of_empty_voxels(self):
         voxel_space = np.ones((10, 10, 10), dtype=np.int8)
 
         voxel_space[4][4][4] = 0
 
-        empty_voxels = GeometryMath.find_empty_voxels_in_space(
+        xi, yj, zk = GeometryMath.find_empty_voxels_in_space(
             voxel_space, [0, 0, 0], [9, 9, 9]
         )
 
-        assert empty_voxels == [[4, 4, 4]]
+        assert list(xi) == [4]
+        assert list(yj) == [4]
+        assert list(zk) == [4]
 
 
 class TestFindCoordinates:

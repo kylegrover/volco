@@ -2,6 +2,7 @@ pre-commit
 pytest
 black>=24.4.2
 numpy
+numba
 trimesh==3.21.7
 scipy
 nbformat>=4.2.0
