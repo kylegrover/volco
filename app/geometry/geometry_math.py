@@ -1,5 +1,6 @@
 import math
-import numpy as np
+
+from app.array_backend import np
 
 
 class GeometryMath:
@@ -38,13 +39,8 @@ class GeometryMath:
             lower_i : upper_i + 1, lower_j : upper_j + 1, lower_k : upper_k + 1
         ]
 
-        empty_voxels = np.transpose(np.where(mat_aux == 0))
-
-        empty_voxels = [
-            [elem[0] + lower_i, elem[1] + lower_j, elem[2] + lower_k]
-            for elem in empty_voxels
-        ]
-        return empty_voxels
+        xi, yj, zk = np.where(mat_aux == 0)
+        return xi + lower_i, yj + lower_j, zk + lower_k
 
     @staticmethod
     def find_coordinates(indexes, voxel_size):
