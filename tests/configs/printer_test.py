@@ -1,11 +1,11 @@
-import pytest
+from pathlib import Path
 
 from app.configs.printer import Printer
 
 
 class TestPrinter:
     def test_should_load_printer_settings(self):
-        printer = Printer(config_path="tests/fixtures/printer_settings.json")
+        printer = Printer(config_path=str(Path(__file__).resolve().parents[1] / "fixtures" / "printer_settings.json"))
 
         assert printer.nozzle_jerk_speed == 40.0
         assert printer.extruder_jerk_speed == 5.0

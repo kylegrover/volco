@@ -1,11 +1,11 @@
-import pytest
+from pathlib import Path
 
 from app.configs.simulation import Simulation
 
 
 class TestSimulation:
     def test_should_load_simulation_settings(self):
-        simulation = Simulation(config_path="tests/fixtures/simulation_settings.json")
+        simulation = Simulation(config_path=str(Path(__file__).resolve().parents[1] / "fixtures" / "simulation_settings.json"))
 
         assert simulation.voxel_size == 0.05
         assert simulation.step_size == 0.2

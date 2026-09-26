@@ -1,6 +1,6 @@
 import pytest
 
-from app.physics.nozzle_speed import NozzleSpeed
+from app.physics.acceleration.nozzle_speed import NozzleSpeed
 
 
 class TestNozzleSpeed:
@@ -19,4 +19,4 @@ class TestNozzleSpeed:
         )
         nozzle_speed.calculate_displacements()
 
-        assert (nozzle_speed.speed_profile.displacements[-1] - 100.0) < 1e-3
+        assert abs(nozzle_speed.speed_profile.displacements[-1] - 100.0) < 1e-3

@@ -1,7 +1,9 @@
 import pytest
-from app.physics.extruder_speed import ExtruderSpeed
-from app.physics.nozzle_speed import NozzleSpeed
-from app.physics.volume import Volume
+from types import SimpleNamespace
+
+from app.physics.acceleration.extruder_speed import ExtruderSpeed
+from app.physics.acceleration.nozzle_speed import NozzleSpeed
+from app.physics.acceleration.volume import AccelerationVolume
 
 import math
 
@@ -25,14 +27,15 @@ class TestVolume:
         nozzle_speed.calculate_displacements()
 
         extruder_speed = ExtruderSpeed(
-            extrusion_length=extrusion_length,
+            volume=extrusion_length * math.pi * 1.75**2 / 4,
             threshold_speed=threshold_speed,
             acceleration=acceleration,
             total_time=nozzle_speed.total_time,
+            printer=SimpleNamespace(feedstock_filament_diameter=1.75),
         )
         extruder_speed.calculate_displacements()
 
-        volumes = Volume.calculate_volumes_per_step(
+        volumes = AccelerationVolume.calculate_volumes_with_acceleration(
             number_simulation_steps=5,
             step_size=20,
             feedstock_filament_diameter=1.75,
@@ -42,4 +45,5 @@ class TestVolume:
 
         expected_volume = extrusion_length * math.pi * 1.75**2 / 4
 
-        assert volumes[-1] == expected_volume
+        assert volumes[-1] == pytest.approx(expected_volume, rel=1e-3)
+        assert all(a <= b for a, b in zip(volumes, volumes[1:]))

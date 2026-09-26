@@ -1,12 +1,16 @@
-import pytest
+from pathlib import Path
 
+from app.configs.printer import Printer
 from app.instructions.gcode import Gcode
 
 
 class TestGcode:
     def test_should_read_the_gcode(self):
+        fixtures = Path(__file__).resolve().parents[1] / "fixtures"
         gcode = Gcode(
-            gcode_path="tests/fixtures/gcode_example.gcode", default_nozzle_speed=40.0
+            gcode_path=str(fixtures / "gcode_example.gcode"),
+            default_nozzle_speed=40.0,
+            printer=Printer(config_path=str(fixtures / "printer_settings.json")),
         )
 
         gcode.read()

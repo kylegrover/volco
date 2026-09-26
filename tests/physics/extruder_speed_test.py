@@ -1,7 +1,9 @@
-import pytest
-import numpy as np
+import math
+from types import SimpleNamespace
 
-from app.physics.extruder_speed import ExtruderSpeed
+import pytest
+
+from app.physics.acceleration.extruder_speed import ExtruderSpeed
 
 
 class TestExtruderSpeed:
@@ -12,13 +14,14 @@ class TestExtruderSpeed:
         extrusion_length = 100
 
         extruder_speed = ExtruderSpeed(
-            extrusion_length=extrusion_length,
+            volume=extrusion_length * math.pi * 1.75**2 / 4,
             threshold_speed=threshold_speed,
             acceleration=acceleration,
             total_time=1.25,
+            printer=SimpleNamespace(feedstock_filament_diameter=1.75),
         )
         extruder_speed.calculate_displacements()
 
-        assert extruder_speed.target_speed == 100.0
+        assert extruder_speed.target_speed == pytest.approx(100.0)
 
-        assert (extruder_speed.speed_profile.displacements[-1] - 100.0) < 1e-3
+        assert abs(extruder_speed.speed_profile.displacements[-1] - 100.0) < 1e-3
