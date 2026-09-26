@@ -72,6 +72,9 @@ class Sphere:
                       occupied_before_mm3=before, evaluations=0, status='searching',
                       committed=False, best_added_voxels=0)
         self.last_deposition = report
+        # Occupancy and centre are fixed throughout this virtual search. Retain
+        # only the latest bounding box, and discard it before the next step.
+        candidate_cache = {}
 
         def fail(reason):
             report['status'] = 'failed'
@@ -93,7 +96,7 @@ class Sphere:
             if math.prod(shape) > max_grid_voxels:
                 fail('grid voxel budget exhausted')
             report['evaluations'] += 1
-            indices = self._virtual_candidates(space, radius, lower, upper)
+            indices = self._virtual_candidates(space, radius, lower, upper, candidate_cache)
             count = len(indices)
             if abs(count - needed) < abs(report['best_added_voxels'] - needed):
                 report['best_added_voxels'] = count
@@ -145,7 +148,7 @@ class Sphere:
             fail('local increment residual exceeds max_increment_error_mm3')
         if count:
             lower, upper = self.find_sphere_limits(radius, nozzle_height)
-            indices = self._virtual_candidates(space, radius, lower, upper)
+            indices = self._virtual_candidates(space, radius, lower, upper, candidate_cache)
             if len(indices) != count:
                 fail('candidate count changed before commit')
             shape = tuple(max(n, int(indices[:, axis].max()) + 1) for axis, n in enumerate(space.shape))
@@ -166,18 +169,29 @@ class Sphere:
         logger.info('Deposition volume: %s', report)
         return voxel_space
 
-    def _virtual_candidates(self, space, radius, lower, upper):
-        """Count positive-side expansion without allocating an expanded grid."""
-        shape = tuple(max(0, hi - lo + 1) for lo, hi in zip(lower, upper))
-        if not all(shape):
-            return np.empty((0, 3), dtype=int)
-        indices = np.indices(shape).reshape(3, -1).T + np.asarray(lower)
-        distances = np.linalg.norm((indices + .5) * self.voxel_size - self.centre_coordinates, axis=1)
-        indices = indices[distances <= radius + self.voxel_size * 1e-8]
-        inside = np.all(indices < np.asarray(space.shape), axis=1)
-        empty = np.ones(len(indices), dtype=bool)
-        empty[inside] = space[tuple(indices[inside].T)] == 0
-        return indices[empty]
+    def _virtual_candidates(self, space, radius, lower, upper, cache=None):
+        """Return empty candidates, including virtual positive-side expansion.
+
+        Optional single-box cache is valid only within one uncommitted search:
+        space, occupancy, centre and pitch must remain unchanged. Radius is not
+        part of the key because its original distance test is reapplied below.
+        """
+        key = (tuple(lower), tuple(upper))
+        if cache is not None and cache.get('key') == key:
+            indices, distances = cache['indices'], cache['distances']
+        else:
+            shape = tuple(max(0, hi - lo + 1) for lo, hi in zip(lower, upper))
+            if not all(shape):
+                return np.empty((0, 3), dtype=int)
+            indices = np.indices(shape).reshape(3, -1).T + np.asarray(lower)
+            distances = np.linalg.norm((indices + .5) * self.voxel_size - self.centre_coordinates, axis=1)
+            inside = np.all(indices < np.asarray(space.shape), axis=1)
+            empty = np.ones(len(indices), dtype=bool)
+            empty[inside] = space[tuple(indices[inside].T)] == 0
+            indices, distances = indices[empty], distances[empty]
+            if cache is not None:
+                cache.update(key=key, indices=indices, distances=distances)
+        return indices[distances <= radius + self.voxel_size * 1e-8]
 
     def _new_voxel_indices(self, space, radius, lower_indexes, upper_indexes):
         empty_voxels = GeometryMath.find_empty_voxels_in_space(
