@@ -1,10 +1,10 @@
 import logging
+import math
 import os
 import numpy as np
 import trimesh
 
 from app.configs.simulation import Simulation
-from app.geometry.geometry_math import GeometryMath
 from app.geometry.voxel_space import VoxelSpace
 from app.reporter.visualization import color_mesh, visualize_with_trimesh, visualize_with_plotly
 from app.reporter.mesh import generate_mesh_from_voxels, export_mesh_to_stl, generate_and_export_mesh
@@ -28,11 +28,18 @@ class SimulationOutput:
         self._simulation = simulation
         self.cropped_voxel_space = None
         self.mesh = None
+        self.crop_start = None
+        self.world_origin = None
 
     def crop_voxel_space(self):
         """
-        Crop the voxel space based on the simulation configuration.
+        Snapshot whole cells intersecting half-open world-space crop intervals.
         """
+        # Invalidate old results even if a new crop fails validation.
+        self.cropped_voxel_space = None
+        self.mesh = None
+        self.crop_start = None
+        self.world_origin = None
         crop_coordinates_for_axes = [
             self._simulation.x_crop,
             self._simulation.y_crop,
@@ -57,16 +64,16 @@ class SimulationOutput:
             )
             indexes_to_crop.append(indexes_for_axis)
 
-        cropped_voxel_matrix = self.voxel_space.space.copy()
-        self.cropped_voxel_space = cropped_voxel_matrix[
-            indexes_to_crop[0][0] : indexes_to_crop[0][1] + 1,
-            indexes_to_crop[1][0] : indexes_to_crop[1][1] + 1,
-            indexes_to_crop[2][0] : indexes_to_crop[2][1] + 1,
-        ]
+        self.crop_start = np.array([bounds[0] for bounds in indexes_to_crop], dtype=int)
+        self.world_origin = self.crop_start * self._simulation.voxel_size - np.asarray(filament_translations)
+        # Copy only the crop, retaining snapshot semantics without a full-grid copy.
+        self.cropped_voxel_space = self.voxel_space.space[
+            tuple(slice(start, stop) for start, stop in indexes_to_crop)
+        ].copy()
 
     def generate_mesh(self):
         """
-        Generate a 3D mesh from the voxel data using marching cubes algorithm.
+        Generate the exposed voxel faces in input G-code/world coordinates.
         Returns the mesh object for further use.
         """
         if self.cropped_voxel_space is None:
@@ -77,7 +84,7 @@ class SimulationOutput:
         voxel_size = self._simulation.voxel_size
 
         # Create a mesh from the voxel data using the mesh module
-        mesh = generate_mesh_from_voxels(self.cropped_voxel_space, voxel_size)
+        mesh = generate_mesh_from_voxels(self.cropped_voxel_space, voxel_size, origin=self.world_origin)
 
         # Store the mesh for later use
         self.mesh = mesh
@@ -125,7 +132,8 @@ class SimulationOutput:
         # This avoids creating a massive mesh object in memory
         logger.info("[SimulationOutput]: Using streaming exporter for STL.")
         # Use the vectorized streaming exporter which accepts voxel_space directly
-        return generate_and_export_mesh(self.cropped_voxel_space, self._simulation.voxel_size, file_path, binary=not self._simulation.stl_ascii)
+        return generate_and_export_mesh(self.cropped_voxel_space, self._simulation.voxel_size, file_path,
+                                        binary=not self._simulation.stl_ascii, origin=self.world_origin)
 
         # Non-preview: expect a mesh object to be provided or generated previously
         if mesh is None:
@@ -171,33 +179,33 @@ class SimulationOutput:
             return visualize_with_trimesh(mesh)
 
     def _crop_axis(self, crop_coordinates, filament_translation, axis_length):
-        indexes_to_crop = [0, 0]
+        """World interval [lower, upper); retain intersecting whole cells.
 
-        for index in range(0, 2):
-            crop_coordinate = crop_coordinates[index]
-
-            if crop_coordinate == "all":
-                indexes_to_crop[index] = index * (axis_length - 1)
+        Snap roundoff within 1e-9 cell units of an integer before floor/ceil.
+        This avoids admitting an extra cell after cancelling world translations.
+        """
+        if len(crop_coordinates) != 2:
+            raise ValueError('Crop must contain lower and upper bounds')
+        bounds = []
+        h = self._simulation.voxel_size
+        for side, value in enumerate(crop_coordinates):
+            if value == 'all':
+                position = 0.0 if side == 0 else float(axis_length)
             else:
-                coordinate = crop_coordinate + filament_translation
-
-                if coordinate < 0.0 and index == 0:
-                    indexes_to_crop[index] = 0
-                elif coordinate < 0.0 and index == 1:
-                    indexes_to_crop[index] = axis_length - 1
-                else:
-                    candidate_index = GeometryMath.find_index(
-                        coordinate, self._simulation.voxel_size
-                    )
-                    if candidate_index == -1:
-                        candidate_index = 0
-
-                    if candidate_index > axis_length - 1:
-                        indexes_to_crop[1] = axis_length - 1
-                    else:
-                        indexes_to_crop[index] = candidate_index
-
-        return indexes_to_crop
+                position = (float(value) + filament_translation) / h
+                if not math.isfinite(position):
+                    raise ValueError('Crop bounds must be finite or all')
+                nearest = round(position)
+                if abs(position - nearest) <= 1e-9:
+                    position = float(nearest)
+            bounds.append(position)
+        if bounds[0] >= bounds[1]:
+            raise ValueError('Crop lower bound must be below upper bound')
+        start = max(0, min(axis_length, math.floor(bounds[0])))
+        stop = max(0, min(axis_length, math.ceil(bounds[1])))
+        if start >= stop:
+            raise ValueError('Crop does not intersect the voxel grid')
+        return [start, stop]
 
     def _get_result_folder_path(self):
         folder_name = self._simulation.results_folder

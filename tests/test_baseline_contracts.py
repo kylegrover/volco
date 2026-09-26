@@ -102,10 +102,10 @@ def test_mesh_paths_agree_on_known_solids(occupied, tmp_path):
         assert len(mesh.faces) == expected_faces
         assert mesh.is_watertight
         assert mesh.volume == pytest.approx(len(occupied), abs=1e-6)
-        expected_bounds = [[-0.5, -0.5, -0.5],
-                           [max(i[0] for i in occupied) + 0.5,
-                            max(i[1] for i in occupied) + 0.5,
-                            max(i[2] for i in occupied) + 0.5]]
+        expected_bounds = [[0, 0, 0],
+                           [max(i[0] for i in occupied) + 1,
+                            max(i[1] for i in occupied) + 1,
+                            max(i[2] for i in occupied) + 1]]
         np.testing.assert_allclose(mesh.bounds, expected_bounds, atol=1e-6)
 
 
@@ -119,8 +119,13 @@ def test_binary_export_across_slice_boundary(axis, tmp_path):
         index[axis] = position
         grid[tuple(index)] = 1
     path = tmp_path / "seam.stl"
-    export_voxel_stl_streaming_binary(grid, 0.1, str(path))
+    origin = np.array([100.123, -20.456, 3.21])
+    export_voxel_stl_streaming_binary(grid, 0.1, str(path), origin=origin)
     mesh = trimesh.load_mesh(path, force="mesh")
+    expected_bounds = np.array([[0, 0, 0], [.1, .1, .1]])
+    expected_bounds[:, axis] = [4.9, 5.1]
+    np.testing.assert_allclose(mesh.bounds, expected_bounds + origin, atol=8e-6, rtol=0)
+    np.testing.assert_array_equal(mesh.bounds, create_mesh_vectorized(grid, .1, origin=origin).bounds)
     assert len(mesh.faces) == 20
     assert mesh.is_watertight
     assert mesh.volume == pytest.approx(0.002, abs=1e-7)

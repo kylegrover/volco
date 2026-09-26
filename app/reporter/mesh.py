@@ -1,7 +1,6 @@
 import logging
 import trimesh
 import numpy as np
-from skimage import measure
 import scipy.sparse
 import multiprocessing
 from scipy.sparse import coo_matrix
@@ -15,18 +14,20 @@ logger = logging.getLogger(__name__)
 logger.info(f"[Mesh]: Using NumPy {np.__version__}")
 
 
-def _face_corners(indices, face_vertices, voxel_size):
-    """Compute shared corners once from integer half-voxel grid coordinates.
+def _face_corners(indices, face_vertices, voxel_size, origin=(0, 0, 0)):
+    """Cell i spans [i*h, (i+1)*h], translated by the cell-zero corner origin.
 
-    Adding a float32 voxel center to +/- half a voxel yields different rounded
-    results for the same corner on neighboring faces at non-binary pitches.
+    Shared integer corners use one float conversion, avoiding cracks caused
+    by separately adding rounded centres and half-voxel offsets.
     """
     offsets = np.sign(face_vertices).astype(np.int8)
-    half_grid = 2 * indices[:, np.newaxis, :] + offsets[np.newaxis, :, :]
-    return (half_grid * (voxel_size / 2)).astype(np.float32)
+    corners = indices[:, np.newaxis, :] + (offsets[np.newaxis, :, :] + 1) // 2
+    # Apply the frame in float64 before the single float32 STL conversion.
+    # Every shared integer corner gets exactly the same rounded coordinates.
+    return (corners * voxel_size + np.asarray(origin, dtype=float)).astype(np.float32)
 
 
-def create_mesh_vectorized(voxel_space, voxel_size):
+def create_mesh_vectorized(voxel_space, voxel_size, origin=(0, 0, 0)):
     """
     Create a mesh from a voxel space using vectorized operations.
     This is much faster than iterating over voxels in Python.
@@ -99,7 +100,7 @@ def create_mesh_vectorized(voxel_space, voxel_size):
             continue
         
         face_vertices_template = cube[face_verts]  # shape (4, 3)
-        verts = _face_corners(indices, face_vertices_template, voxel_size)
+        verts = _face_corners(indices, face_vertices_template, voxel_size, origin)
         
         # Reshape to (M*4, 3) to add to vertex list
         verts_flat = verts.reshape(-1, 3)
@@ -137,7 +138,7 @@ def create_mesh_vectorized(voxel_space, voxel_size):
     else:
         return trimesh.Scene()
 
-def generate_mesh_from_voxels(voxel_space, voxel_size):
+def generate_mesh_from_voxels(voxel_space, voxel_size, origin=(0, 0, 0)):
     """
     Generate a 3D mesh from the voxel data using optimized box representation.
     This implementation only creates triangles for voxel faces that are either:
@@ -160,31 +161,9 @@ def generate_mesh_from_voxels(voxel_space, voxel_size):
         logger.warning("[Mesh]: No voxel space provided.")
         return None
     
-    try:
-        logger.info("[Mesh]: Using optimized box representation")
-        voxels = create_mesh_vectorized(voxel_space, voxel_size)
-        return voxels
-    except Exception as e:
-        logger.error(f"[Mesh]: Failed to generate mesh with optimized box representation: {e}")
-        
-        # Fall back to using marching cubes
-        try:
-            logger.warning("[Mesh]: Falling back to marching cubes method")
-            mesh = trimesh.voxel.ops.matrix_to_marching_cubes(voxel_space, pitch=voxel_size)
-            return mesh
-        except Exception as e:
-            logger.warning(f"[Mesh]: Failed to generate mesh with trimesh: {e}")
-            
-            # Fall back to using skimage directly
-            try:
-                logger.warning("[Mesh]: Falling back to skimage marching cubes")
-                verts, faces, normals, values = measure.marching_cubes(voxel_space, level=0.5)
-                verts = verts * voxel_size
-                mesh = trimesh.Trimesh(vertices=verts, faces=faces)
-                return mesh
-            except Exception as e:
-                logger.error(f"[Mesh]: Failed to generate mesh with skimage: {e}")
-                return None
+    # A fallback to marching cubes changes surface, volume and frame. Fail
+    # rather than silently returning a different geometric representation.
+    return create_mesh_vectorized(voxel_space, voxel_size, origin)
 
 def export_mesh_to_stl(mesh, file_path, ascii_format=True):
     """
@@ -221,7 +200,7 @@ def export_mesh_to_stl(mesh, file_path, ascii_format=True):
         logger.error(f"[Mesh]: Failed to export STL: {e}")
         return None
 
-def export_voxel_stl_streaming_binary(voxel_space, voxel_size, file_path):
+def export_voxel_stl_streaming_binary(voxel_space, voxel_size, file_path, origin=(0, 0, 0)):
     """
     Export a voxel space as a binary STL file using streaming (low-memory) logic.
     Only surface faces are written, and no full mesh is held in RAM.
@@ -320,7 +299,7 @@ def export_voxel_stl_streaming_binary(voxel_space, voxel_size, file_path):
                         continue
                     indices[:, 2] += global_offset
                     triangle_count += write_face_triangles(
-                        f, indices, face_vertices, normal, voxel_size, stl_dtype, chunk_size
+                        f, indices, face_vertices, normal, voxel_size, stl_dtype, chunk_size, origin
                     )
                     del slice_filled, mask, indices
 
@@ -360,7 +339,7 @@ def export_voxel_stl_streaming_binary(voxel_space, voxel_size, file_path):
                         continue
                     indices[:, 1] += global_offset
                     triangle_count += write_face_triangles(
-                        f, indices, face_vertices, normal, voxel_size, stl_dtype, chunk_size
+                        f, indices, face_vertices, normal, voxel_size, stl_dtype, chunk_size, origin
                     )
                     del slice_filled, mask, indices
 
@@ -400,7 +379,7 @@ def export_voxel_stl_streaming_binary(voxel_space, voxel_size, file_path):
                         continue
                     indices[:, 0] += global_offset
                     triangle_count += write_face_triangles(
-                        f, indices, face_vertices, normal, voxel_size, stl_dtype, chunk_size
+                        f, indices, face_vertices, normal, voxel_size, stl_dtype, chunk_size, origin
                     )
                     del slice_filled, mask, indices
 
@@ -417,7 +396,7 @@ def export_voxel_stl_streaming_binary(voxel_space, voxel_size, file_path):
     return file_path
 
 
-def write_face_triangles(f, indices, face_vertices, normal, voxel_size, stl_dtype, chunk_size):
+def write_face_triangles(f, indices, face_vertices, normal, voxel_size, stl_dtype, chunk_size, origin=(0, 0, 0)):
     """
     Helper function to write triangles for a set of voxel indices.
     Returns the number of triangles written.
@@ -435,7 +414,7 @@ def write_face_triangles(f, indices, face_vertices, normal, voxel_size, stl_dtyp
         M = end - start
         num_tris = M * 2
         
-        verts = _face_corners(idx_chunk, face_vertices, voxel_size)
+        verts = _face_corners(idx_chunk, face_vertices, voxel_size, origin)
         
         # Triangle 1: [0, 1, 2]
         chunk_buffer['normal'][:M] = normal
@@ -458,7 +437,7 @@ def write_face_triangles(f, indices, face_vertices, normal, voxel_size, stl_dtyp
     
     return triangle_count
 
-def generate_and_export_mesh(voxel_space, voxel_size, file_path, binary=True):
+def generate_and_export_mesh(voxel_space, voxel_size, file_path, binary=True, origin=(0, 0, 0)):
     """
     Generate and export a mesh from voxel space using streaming approach.
     Supports both ASCII and binary STL formats with equivalent performance.
@@ -487,10 +466,10 @@ def generate_and_export_mesh(voxel_space, voxel_size, file_path, binary=True):
     try:
         if binary:
             logger.info("[Mesh]: Exporting STL in binary format (streaming)")
-            result_path = export_voxel_stl_streaming_binary(voxel_space, voxel_size, file_path)
+            result_path = export_voxel_stl_streaming_binary(voxel_space, voxel_size, file_path, origin)
         else:
             logger.info("[Mesh]: Exporting STL in ASCII format (streaming)")
-            result_path = export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path)
+            result_path = export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path, origin)
         
         logger.info(f"[Mesh]: STL exported successfully!")
         return result_path
@@ -512,7 +491,7 @@ def _format_chunk_worker(args):
     return b''.join(result)
 
 
-def export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path):
+def export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path, origin=(0, 0, 0)):
     """
     Optimized ASCII STL exporter using face-by-face streaming and parallel formatting.
     
@@ -565,9 +544,9 @@ def export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path):
     template = (
         b"  facet normal %.6e %.6e %.6e\n"
         b"    outer loop\n"
-        b"      vertex %.6e %.6e %.6e\n"
-        b"      vertex %.6e %.6e %.6e\n"
-        b"      vertex %.6e %.6e %.6e\n"
+        b"      vertex %.17g %.17g %.17g\n"
+        b"      vertex %.17g %.17g %.17g\n"
+        b"      vertex %.17g %.17g %.17g\n"
         b"    endloop\n"
         b"  endfacet\n"
     )
@@ -618,7 +597,7 @@ def export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path):
                 # Compute vertices for this face
                 N = indices.shape[0]
                 face_vertices = cube[face_verts]
-                verts = _face_corners(indices, face_vertices, voxel_size)
+                verts = _face_corners(indices, face_vertices, voxel_size, origin)
                 
                 tri0 = verts[:, [0, 1, 2], :]
                 tri1 = verts[:, [0, 2, 3], :]

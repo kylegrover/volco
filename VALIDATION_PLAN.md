@@ -1,6 +1,6 @@
 # From numerical baseline to measured print prediction
 
-**Status:** B1 now has bounded nearest-candidate deposition, boundary guards and local/cumulative diagnostics; see [NUMERICAL_SEARCH.md](NUMERICAL_SEARCH.md). Physically justified default error/domain limits and B2 export coordinates remain open. This is not physical validation. Work on `baseline/trustworthy` first; do not advance `dev`, change the GUI-pinned submodule, or merge experimental physics merely to satisfy this plan. Detailed private evidence lives in the adjacent GUI repository's ignored `notes/`. [Current baseline contracts and limits](BASELINE.md).
+**Status:** B1 now has bounded nearest-candidate deposition, boundary guards and local/cumulative diagnostics; see [NUMERICAL_SEARCH.md](NUMERICAL_SEARCH.md). B2 crop/world export is implemented with failing-first regressions; see [EXPORT_COORDINATES.md](EXPORT_COORDINATES.md). Physically justified default error/domain limits remain open. This is not physical validation. Work on `baseline/trustworthy` first; do not advance `dev`, change the GUI-pinned submodule, or merge experimental physics merely to satisfy this plan. Detailed private evidence lives in the adjacent GUI repository's ignored `notes/`. [Current baseline contracts and limits](BASELINE.md).
 
 ## Goal and inputs
 
@@ -8,7 +8,7 @@ The long-term goal is to predict **what material geometry a real printer produce
 
 ### Reported target printer and input provenance
 
-The user reports a Sovol SV08, 0.4 mm nozzle, PLA/PLA+, typically 0.2 mm layer height and 0.42 mm line width. The slicer is believed to be OrcaSlicer (profile/version confirmation pending); some paths are generated directly in Python with FullControl. Speeds and full thermal/flow settings are not yet supplied. These are context, not calibrated material parameters or settings to force onto every input. Retain actual G-code/profile or generator provenance for each experiment.
+The user relays a Sovol SV08, 0.4 mm nozzle, SUNLU Yellow PLA+ 2.0 and OrcaSlicer 2.4.2. Ordinary profile: 0.20 mm layers / 0.25 mm first; outer/inner/first-layer widths 0.42/0.45/0.50 mm; nominal outer/inner-infill/first-layer speeds 150/200/30 mm/s, subject to a 20 mm³/s volumetric cap; nozzle 215 °C first / 210 °C later, bed 65 °C. Flow 0.90 is provisional. A successfully installed camera-wedge v2 is available as a deferred small-real-print candidate with STL, Orca project and actual G-code: it instead used 0.12 mm layers, four walls, 35/80 mm/s outer/inner walls, 40% infill and 20 mm/s bridges. These details are reported, not yet verified against files; no as-printed dimensions are measured. Some other paths are generated directly in Python with FullControl. These are context, not calibrated material parameters or settings to force onto every input. Retain actual G-code/profile or generator provenance for each experiment.
 
 ### Physical intent versus numerical accounting
 
@@ -33,11 +33,13 @@ At finite voxel size, nearest-shell occupancy can jump past the target. Define a
 
 Run the full engine suite with the documented command; write a failing regression before changing search semantics. Keep preview's intentionally non-conserving output out of full-simulation material comparisons.
 
-### B2. Normalize geometry coordinates and export (next)
+### B2. Normalize geometry coordinates and export (implemented)
+
+Completed with mesh/binary/ASCII world-frame tests, invalid/half-open crops, recropping and translated exporter seam coverage. Engine suite: **85 passed**. The frame decision below is implemented; detailed contract and compatibility changes are in `EXPORT_COORDINATES.md`.
 
 Choose **one cell convention**: grid cell `[i,j,k]` covers `[i*h,(i+1)*h]` per axis; its center is `(i+0.5, j+0.5, k+0.5)*h`. This is already how deposition locates voxel centers. `x_translation = x_offset - min_printed_x`, `y_translation = y_offset - min_printed_y`, `z_translation = 0` in today's `VoxelSpace` initialization. For a crop starting at integer grid index `crop_start`, the corresponding output cell center in input G-code/world coordinates is `(crop_start + local_index + 0.5)*h - (x_translation,y_translation,0)`. Corners use the same rule without `+0.5`; Z sphere deposition offset affects *where material is placed*, not this coordinate-frame transform.
 
-Today low-level STL paths center voxel `[i,j,k]` on `i*h` and `SimulationOutput` omits crop origin/translation. Write exact failing tests at nonzero world coordinates, nonzero XY translations and a nontrivial XYZ crop, for mesh-object, binary and ASCII output. Decide whether low-level voxel exports stay grid-local and the `SimulationOutput` boundary applies the world transform (preferred), then use the **same transform** for all paths. Document the output frame and update test bounds deliberately; changing a half-voxel shift without accounting for crop/world translation is not sufficient. Ensure normals, watertightness and occupied-volume equivalence survive the change. No viewer-side compensation or undocumented STL shifts.
+Before this repair, low-level STL paths centred voxel `[i,j,k]` on `i*h` and `SimulationOutput` omitted crop origin/translation. The completed failing-first work followed this specification: write exact failing tests at nonzero world coordinates, nonzero XY translations and a nontrivial XYZ crop, for mesh-object, binary and ASCII output. Decide whether low-level voxel exports stay grid-local and the `SimulationOutput` boundary applies the world transform (preferred), then use the **same transform** for all paths. Document the output frame and update test bounds deliberately; changing a half-voxel shift without accounting for crop/world translation is not sufficient. Ensure normals, watertightness and occupied-volume equivalence survive the change. No viewer-side compensation or undocumented STL shifts.
 
 ### B exit gate
 
@@ -67,7 +69,7 @@ For the real bracket/art file, choose representative voxel/step sizes only after
 
 ## Open inputs/decisions
 
-- Need a small real-print G-code plus model/profile or FullControl generator provenance to start the bounded scaling gate. An everyday bracket/art workload can follow; no large full-print run by default. Speeds, thermal/flow profile, slicer confirmation and intended simulation-machine/turnaround budget remain pending.
+- Need a small real-print G-code plus model/profile or FullControl generator provenance to start the bounded scaling gate. An everyday bracket/art workload can follow; no large full-print run by default. Profile and candidate settings are reported above, but file/config inspection and intended simulation-machine/turnaround budget remain pending.
 - Printer/nozzle and typical material/layer/width are reported above; exact material, thermal/flow settings and a preflighted bridge variant are still needed before printing that candidate. Measurement setup and straight-span control remain undecided. No physical measurements have been made yet.
 - Numerical error/finite-search thresholds and crop/world-frame regression expectations require evidence and failing tests, not arbitrary constants.
 - Advancing `dev`, GUI integration, pushing, commercial distribution and final release checks are separate actions. This document authorizes none of them.

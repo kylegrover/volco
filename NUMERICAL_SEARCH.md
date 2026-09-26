@@ -1,6 +1,6 @@
 # Bounded deposition search contract
 
-This is a numerical safety contract, not a physical-accuracy claim. Coordinate-frame export remains a separate gate in `VALIDATION_PLAN.md`.
+This is a numerical safety contract, not a physical-accuracy claim. Coordinate-frame export is covered separately in `EXPORT_COORDINATES.md`; numerical and physical acceptance remain distinct.
 
 ## Domain and candidate selection
 
