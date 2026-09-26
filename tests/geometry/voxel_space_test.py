@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from app.geometry.geometry_math import GeometryMath
 from app.instructions.gcode import Gcode
@@ -127,7 +129,8 @@ class TestPrint:
     def test_should_print(self):
         printer = FakePrinter()
         test_instruction = Gcode(
-            gcode_path="tests/fixtures/gcode_example.gcode", default_nozzle_speed=40.0, printer=printer
+            gcode_path=str(Path(__file__).resolve().parents[1] / "fixtures" / "gcode_example.gcode"),
+            default_nozzle_speed=40.0, printer=printer
         )
         test_instruction.read()
 
@@ -145,4 +148,8 @@ class TestPrint:
         total_deposited_volume = GeometryMath.calculate_filled_volume(
             voxel_space.space, simulation_config.voxel_size
         )
-        assert (total_deposited_volume - 0.9595) < 1e-6
+        requested_volume = sum(segment[2] for segment in test_instruction.filaments_coordinates)
+        # Discrete voxels cannot match every target exactly. This fixture should
+        # nevertheless deposit close to the parsed feedstock, not simply less.
+        assert abs(total_deposited_volume - requested_volume) <= 0.05
+        assert voxel_space._filled_voxels_count == (voxel_space.space != 0).sum()

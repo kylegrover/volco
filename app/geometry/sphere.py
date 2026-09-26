@@ -19,6 +19,11 @@ class Sphere:
         solver_tolerance,
         radius_increment,
     ):
+        # Earlier quantized steps can already overshoot a later cumulative
+        # target. Never add material merely to satisfy an already-met target.
+        if GeometryMath.calculate_filled_volume(voxel_space, self.voxel_size) >= voxel_space_target_volume:
+            return voxel_space
+
         initial_radius = self.estimate_initial_radius(sphere_volume)
 
         # Search counts candidates against the unchanged occupancy. Only the

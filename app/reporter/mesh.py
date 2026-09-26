@@ -14,6 +14,18 @@ logger = logging.getLogger(__name__)
 # Log NumPy version for debugging purposes
 logger.info(f"[Mesh]: Using NumPy {np.__version__}")
 
+
+def _face_corners(indices, face_vertices, voxel_size):
+    """Compute shared corners once from integer half-voxel grid coordinates.
+
+    Adding a float32 voxel center to +/- half a voxel yields different rounded
+    results for the same corner on neighboring faces at non-binary pitches.
+    """
+    offsets = np.sign(face_vertices).astype(np.int8)
+    half_grid = 2 * indices[:, np.newaxis, :] + offsets[np.newaxis, :, :]
+    return (half_grid * (voxel_size / 2)).astype(np.float32)
+
+
 def create_mesh_vectorized(voxel_space, voxel_size):
     """
     Create a mesh from a voxel space using vectorized operations.
@@ -86,15 +98,8 @@ def create_mesh_vectorized(voxel_space, voxel_size):
         if indices.size == 0:
             continue
         
-        # Compute voxel centers
-        centers = indices.astype(np.float32) * voxel_size
-        
-        # Precompute face vertices from cube
         face_vertices_template = cube[face_verts]  # shape (4, 3)
-        
-        # Build vertices for all voxels in this face direction: shape (M, 4, 3)
-        # Broadcasting: (M, 1, 3) + (1, 4, 3) -> (M, 4, 3)
-        verts = centers[:, np.newaxis, :] + face_vertices_template[np.newaxis, :, :]
+        verts = _face_corners(indices, face_vertices_template, voxel_size)
         
         # Reshape to (M*4, 3) to add to vertex list
         verts_flat = verts.reshape(-1, 3)
@@ -430,8 +435,7 @@ def write_face_triangles(f, indices, face_vertices, normal, voxel_size, stl_dtyp
         M = end - start
         num_tris = M * 2
         
-        centers = idx_chunk.astype(np.float32) * voxel_size
-        verts = centers[:, np.newaxis, :] + face_vertices[np.newaxis, :, :]
+        verts = _face_corners(idx_chunk, face_vertices, voxel_size)
         
         # Triangle 1: [0, 1, 2]
         chunk_buffer['normal'][:M] = normal
@@ -450,7 +454,7 @@ def write_face_triangles(f, indices, face_vertices, normal, voxel_size, stl_dtyp
         f.write(chunk_buffer[:num_tris].tobytes())
         triangle_count += num_tris
         
-        del verts, centers
+        del verts
     
     return triangle_count
 
@@ -613,9 +617,8 @@ def export_voxel_stl_streaming_ascii(voxel_space, voxel_size, file_path):
                 
                 # Compute vertices for this face
                 N = indices.shape[0]
-                centers = indices.astype(np.float32) * voxel_size
                 face_vertices = cube[face_verts]
-                verts = centers[:, np.newaxis, :] + face_vertices[np.newaxis, :, :]
+                verts = _face_corners(indices, face_vertices, voxel_size)
                 
                 tri0 = verts[:, [0, 1, 2], :]
                 tri1 = verts[:, [0, 2, 3], :]

@@ -60,6 +60,18 @@ def test_radius_trials_are_independent_and_do_not_change_counter():
     assert sphere._deposit_sphere(0.15, space, 0.8, 0.02)[0] == small_error
 
 
+def test_already_exceeded_target_does_not_deposit_more(monkeypatch):
+    sphere = Sphere([1, 1, 0.5], 0.1)
+    space = SimpleNamespace(space=np.zeros((30, 30, 20), dtype=np.int8),
+                            _filled_voxels_count=1)
+    space.space[10, 10, 4] = 1
+    def unnecessary_trial(*args):
+        raise AssertionError("An already-met target must not search for a radius")
+    monkeypatch.setattr(sphere, "_deposit_sphere", unnecessary_trial)
+    assert sphere.deposit_sphere(space, 0.8, 0.02, 0.0005, 0.001, 0.05) is space
+    assert space._filled_voxels_count == np.count_nonzero(space.space) == 1
+
+
 def test_accepted_sphere_is_committed_once():
     sphere = Sphere([1, 1, 0.5], 0.1)
     space = SimpleNamespace(space=np.zeros((30, 30, 20), dtype=np.int8),
@@ -95,3 +107,32 @@ def test_mesh_paths_agree_on_known_solids(occupied, tmp_path):
                             max(i[1] for i in occupied) + 0.5,
                             max(i[2] for i in occupied) + 0.5]]
         np.testing.assert_allclose(mesh.bounds, expected_bounds, atol=1e-6)
+
+
+@pytest.mark.parametrize("axis", range(3))
+def test_binary_export_across_slice_boundary(axis, tmp_path):
+    shape = [1, 1, 1]
+    shape[axis] = 52
+    grid = np.zeros(shape, dtype=np.int8)
+    for position in (49, 50):
+        index = [0, 0, 0]
+        index[axis] = position
+        grid[tuple(index)] = 1
+    path = tmp_path / "seam.stl"
+    export_voxel_stl_streaming_binary(grid, 0.1, str(path))
+    mesh = trimesh.load_mesh(path, force="mesh")
+    assert len(mesh.faces) == 20
+    assert mesh.is_watertight
+    assert mesh.volume == pytest.approx(0.002, abs=1e-7)
+
+
+def test_nonbinary_pitch_ascii_and_mesh_agree(tmp_path):
+    grid = np.zeros((4, 3, 2), dtype=np.int8)
+    grid[1:3, 1, 0] = 1
+    path = tmp_path / "small.stl"
+    export_voxel_stl_streaming_ascii(grid, 0.1, str(path))
+    for mesh in (trimesh.load_mesh(path, force="mesh"),
+                 create_mesh_vectorized(grid, 0.1)):
+        assert len(mesh.faces) == 20
+        assert mesh.is_watertight
+        assert mesh.volume == pytest.approx(0.002, abs=1e-7)
