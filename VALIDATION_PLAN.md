@@ -6,6 +6,16 @@
 
 The long-term goal is to predict **what material geometry a real printer produces**, including effects that change layer shape, voids, overhangs and unsupported strands. Volco currently consumes **G-code extrusion/tool paths**, not an input STL directly: a design STL has to be sliced before its path, flow and timing exist. A usable result must distinguish design geometry, commanded path, numerical voxel geometry, and measured printed geometry. It must state printer, slicer, material, settings and modeled versus unmodeled effects; no output STL is proof of physical fidelity.
 
+### Reported target printer and input provenance
+
+The user reports a Sovol SV08, 0.4 mm nozzle, PLA/PLA+, typically 0.2 mm layer height and 0.42 mm line width. The slicer is believed to be OrcaSlicer (profile/version confirmation pending); some paths are generated directly in Python with FullControl. Speeds and full thermal/flow settings are not yet supplied. These are context, not calibrated material parameters or settings to force onto every input. Retain actual G-code/profile or generator provenance for each experiment.
+
+### Physical intent versus numerical accounting
+
+The goal includes predicting whether constrained deposition produces a glob, smear, accessible-void filling, or possible printer trouble such as gear slip or hotend buildup. Current cumulative-volume debt repayment is a numerical baseline device, **not** a pressure/storage or delayed-extrusion model. Search-budget exhaustion is a simulator limitation, not evidence a print is unprintable. Geometrically nearby empty voxels need not be physically accessible through intervening material. Commanded feed can differ from actual extruded material when slip or other failures occur; forcing all commanded volume into arbitrary cells would not simulate that outcome.
+
+Treat geometry-only warnings as suspected risk or outside model coverage. Predicting slip/pressure/failure needs appropriate material, machine and experimental evidence. Use ordinary safe prints and existing observations first; do not deliberately jam the printer or disable protections. Choose one observable physical effect at a time, with calibration and validation separated.
+
 Use three *distinct* work items:
 1. **Exact tiny numerical cases:** parser, independent deposition trials, known voxel solids, crop/coordinate frames, bounded error and export parity. These can have strict or resolution-aware assertions.
 2. **Representative everyday workload:** a real sliced bracket or small desk-art piece using layers/depth unusually, supplied with the design file and the actual sliced G-code. Choose one after the file/settings exist, not a contrived cube as the sole speed target. Measure full-run fidelity indicators, wall time and peak memory separately from tiny tests.
@@ -45,13 +55,19 @@ Inspected with this branch's parser and the existing example printer configurati
 
 Before fitting physics: test gravity-off/supported controls, time-step/resolution sensitivity, units, temperature timeline, travel chain breaks, material conservation and **whether any deformed representation actually reaches exported geometry**. The old hybrid solver changes segment records without rerasterizing old deposits; grid and filament prototypes have other documented heat/material problems. Do not merge them wholesale. If a model is calibrated against one bridge condition, reserve another span/speed/temperature condition for validation; report mismatch and limitations honestly. Any statement of physical prediction needs observed print geometry, not just agreement between two simulation settings.
 
-## P — performance after the B exit gate
+## P — small-real-print feasibility and staged performance
+
+The user previously avoided full-print G-code because Volco was slow. Start with a **small real complete print**, not a large production input; establish bounded performance/scaling before increasing workload size. Basic feasibility measurements should precede expensive new physics work, while equivalent-fidelity optimization follows the numerical/export gate.
+
+Preflight grid dimensions, path length, deposition-step count, layers and extrusion volume: raw G-code line count is not a sufficient cost predictor. Agree an external wall-time and memory budget before each new scale; per-step search guards do not bound the entire run or all pipeline allocations. If an early-layer prefix is used, retain modal state and all prior support/deposition, label it a partial workload and preserve the original file. Do not sample arbitrary motion lines or upper layers and call that an equivalent print.
+
+Measure a few increasing valid workloads at fixed voxel/step resolution and model semantics. Record stage times, peak memory where measurable, evaluation counts and diagnostic logging cost; inspect growth rather than assuming linear scaling. Set a practical turnaround target with the user after the first measurements, then profile and optimize the dominant cost before authorizing a larger run.
 
 For the real bracket/art file, choose representative voxel/step sizes only after numerical error characterization. Measure parsing, deposition and export separately, total time and process peak memory (including ASCII workers), with hashes/revision/config/environment and output material/geometry checks. Include one tiny correctness case and one bounded stress case. Profile the corrected baseline before selecting a change; preview, coarser grids and altered deposition rules are *not* equal-fidelity speedups. Bridge simulation is a separate physics comparison, not the sole benchmark.
 
 ## Open inputs/decisions
 
-- Need an actual bracket/art model plus sliced G-code and print settings to select the everyday workload. Until provided, no performance target or real-print generality claim.
-- Need the intended printer/material and a preflighted bridge variant before printing; physical measurement setup and straight-span control must be decided. No physical measurements have been made yet.
+- Need a small real-print G-code plus model/profile or FullControl generator provenance to start the bounded scaling gate. An everyday bracket/art workload can follow; no large full-print run by default. Speeds, thermal/flow profile, slicer confirmation and intended simulation-machine/turnaround budget remain pending.
+- Printer/nozzle and typical material/layer/width are reported above; exact material, thermal/flow settings and a preflighted bridge variant are still needed before printing that candidate. Measurement setup and straight-span control remain undecided. No physical measurements have been made yet.
 - Numerical error/finite-search thresholds and crop/world-frame regression expectations require evidence and failing tests, not arbitrary constants.
 - Advancing `dev`, GUI integration, pushing, commercial distribution and final release checks are separate actions. This document authorizes none of them.
