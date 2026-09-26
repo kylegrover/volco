@@ -21,10 +21,10 @@ class Sphere:
     ):
         initial_radius = self.estimate_initial_radius(sphere_volume)
 
-        # `voxel_space` is expected to be a VoxelSpace object here. The
-        # bisection solver and inner functions will mutate and ultimately
-        # return that object so callers can read `.space` and counters.
-        _, voxel_space_out = BisectionMethod().execute(
+        # Search counts candidates against the unchanged occupancy. Only the
+        # selected radius is filled; rejected trials may expand the empty grid
+        # but must not deposit material or update the running count.
+        _, radius = BisectionMethod().execute(
             self._deposit_sphere,
             initial_point=initial_radius,
             tolerance=solver_tolerance,
@@ -37,35 +37,31 @@ class Sphere:
             ),
         )
 
-        return voxel_space_out
+        voxel_space = self.deform_voxel_space_for_big_spheres(voxel_space, radius)
+        lower_indexes, upper_indexes = self.find_sphere_limits(radius, nozzle_height)
+        self.fill_voxels(voxel_space, radius, lower_indexes, upper_indexes)
+        return voxel_space
+
+    def _new_voxel_indices(self, space, radius, lower_indexes, upper_indexes):
+        empty_voxels = GeometryMath.find_empty_voxels_in_space(
+            space, lower_indexes, upper_indexes
+        )
+        if not empty_voxels:
+            return np.empty((0, 3), dtype=int)
+
+        empty_voxels_np = np.asarray(empty_voxels)
+        voxel_coords = (empty_voxels_np + 0.5) * self.voxel_size
+        distances = np.linalg.norm(voxel_coords - self.centre_coordinates, axis=1)
+        return empty_voxels_np[distances <= radius + self.voxel_size * 1e-8]
 
     def fill_voxels(self, voxel_space_obj, radius, lower_indexes, upper_indexes):
         # Accept either a VoxelSpace-like object (has `.space`) or a raw ndarray.
         is_voxel_space = hasattr(voxel_space_obj, "space")
         space = voxel_space_obj.space if is_voxel_space else voxel_space_obj
 
-        empty_voxels = GeometryMath.find_empty_voxels_in_space(
-            space, lower_indexes, upper_indexes
-        )
-
-        if not empty_voxels:
+        fill_indices = self._new_voxel_indices(space, radius, lower_indexes, upper_indexes)
+        if not len(fill_indices):
             return voxel_space_obj
-
-        # Convert to numpy array for vectorized operations
-        empty_voxels_np = np.array(empty_voxels)
-        # Calculate coordinates for all voxels at once
-        voxel_coords = self.voxel_size * (2 * (empty_voxels_np + 1) - 1) * 0.5
-        # Calculate distances to centre for all voxels
-        centre = np.array(self.centre_coordinates)
-        dists = np.linalg.norm(voxel_coords - centre, axis=1)
-        # Mask for voxels within radius
-        mask = dists <= radius + self.voxel_size * 1e-8
-
-        if not np.any(mask):
-            return voxel_space_obj
-
-        # Filter indices that should be filled
-        fill_indices = empty_voxels_np[mask]
 
         # Advanced index assignment (vectorized)
         xi = fill_indices[:, 0].astype(int)
@@ -168,14 +164,13 @@ class Sphere:
 
         lower_indexes, upper_indexes = self.find_sphere_limits(radius, nozzle_height)
 
-        vs = self.fill_voxels(vs, radius, lower_indexes, upper_indexes)
-
+        space = vs.space if hasattr(vs, "space") else vs
+        n_new = len(self._new_voxel_indices(space, radius, lower_indexes, upper_indexes))
         current_volume = GeometryMath.calculate_filled_volume(vs, self.voxel_size)
+        volume_overshoot = (current_volume + n_new * self.voxel_size**3) / target_volume - 1.0
 
-        volume_overshoot = current_volume / target_volume - 1.0
-
-        # Return the computed overshoot and the (possibly mutated) voxel container
-        return volume_overshoot, vs
+        # Return the radius to the solver without committing this trial.
+        return volume_overshoot, radius
 
     def _increase_solver_tolerance(self, radius_a, radius_b):
         return radius_b - radius_a < self.voxel_size * 0.5

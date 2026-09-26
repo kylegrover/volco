@@ -7,7 +7,10 @@ class Volume:
         number_simulation_steps, total_volume, consider_acceleration=False,
         filament_length=None, printing_speed=None, printer=None,
     ):
-        """Get volumes for a filament segment (handles both acceleration modes)
+        """Get cumulative deposited-volume targets for each simulation step.
+
+        Both uniform and acceleration-aware paths return total volume deposited
+        since the start of this filament, not an increment for that step.
         
         There are two approaches to calculating filament volume distribution:
         
@@ -27,7 +30,7 @@ class Volume:
         if not consider_acceleration:
             # Simple case: evenly distribute the volume across steps
             volume_per_step = total_volume / number_simulation_steps
-            return [volume_per_step for i in range(number_simulation_steps)]
+            return [volume_per_step * (i + 1) for i in range(number_simulation_steps)]
         
         # Complex case: use acceleration-specific implementation
         from app.physics.acceleration.volume import AccelerationVolume

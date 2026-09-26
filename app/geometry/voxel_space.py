@@ -325,8 +325,10 @@ class VoxelSpace:
                 centre_coordinates[2] - self._simulation.sphere_z_offset
             )
 
-            sphere_volume = volumes[step_n]
-            volume_target = total_deposited_volume + sphere_volume
+            # Volume.get_volumes_for_filament returns cumulative targets; the
+            # radius estimate needs only this step's intended increment.
+            sphere_volume = volumes[step_n] - (volumes[step_n - 1] if step_n else 0.0)
+            volume_target = total_deposited_volume + volumes[step_n]
 
             sphere = Sphere(
                 centre_coordinates=centre_coordinates,

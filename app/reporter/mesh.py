@@ -61,18 +61,24 @@ def create_mesh_vectorized(voxel_space, voxel_size):
         # Build surface mask for this face direction
         mask = np.zeros_like(filled, dtype=bool)
         
-        if face_idx == 0:  # -Z face
-            mask[:, :, :-1] = filled[:, :, :-1] & ~filled[:, :, 1:]
-        elif face_idx == 1:  # +Z face
+        if face_idx == 0:  # -Z face: first plane or empty previous plane
+            mask[:, :, 0] = filled[:, :, 0]
             mask[:, :, 1:] = filled[:, :, 1:] & ~filled[:, :, :-1]
+        elif face_idx == 1:  # +Z face: last plane or empty next plane
+            mask[:, :, -1] = filled[:, :, -1]
+            mask[:, :, :-1] = filled[:, :, :-1] & ~filled[:, :, 1:]
         elif face_idx == 2:  # -Y face
-            mask[:, :-1, :] = filled[:, :-1, :] & ~filled[:, 1:, :]
-        elif face_idx == 3:  # +Y face
+            mask[:, 0, :] = filled[:, 0, :]
             mask[:, 1:, :] = filled[:, 1:, :] & ~filled[:, :-1, :]
+        elif face_idx == 3:  # +Y face
+            mask[:, -1, :] = filled[:, -1, :]
+            mask[:, :-1, :] = filled[:, :-1, :] & ~filled[:, 1:, :]
         elif face_idx == 4:  # -X face
-            mask[:-1, :, :] = filled[:-1, :, :] & ~filled[1:, :, :]
-        elif face_idx == 5:  # +X face
+            mask[0, :, :] = filled[0, :, :]
             mask[1:, :, :] = filled[1:, :, :] & ~filled[:-1, :, :]
+        elif face_idx == 5:  # +X face
+            mask[-1, :, :] = filled[-1, :, :]
+            mask[:-1, :, :] = filled[:-1, :, :] & ~filled[1:, :, :]
         
         # Get indices of voxels with visible faces
         indices = np.array(np.where(mask)).T
