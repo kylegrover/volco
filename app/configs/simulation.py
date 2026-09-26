@@ -1,4 +1,5 @@
 import json
+import math
 
 
 class Simulation:
@@ -56,3 +57,26 @@ class Simulation:
 
         # Preview mode (fast, lightweight visualization)
         self.preview_mode = config.get("preview_mode", False)
+
+        # Operational budgets, not validated physical-domain limits.
+        self.max_evaluations = config.get('max_evaluations', 128)
+        self.max_candidate_voxels = config.get('max_candidate_voxels', 250000)
+        self.max_grid_voxels = config.get('max_grid_voxels', 64000000)
+        self.max_volume_error_mm3 = config.get('max_volume_error_mm3')
+        self.max_increment_error_mm3 = config.get('max_increment_error_mm3')
+        for name in ('voxel_size', 'step_size', 'radius_increment', 'solver_tolerance'):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f'{name} must be finite and positive')
+        for name in ('x_offset', 'y_offset', 'z_offset', 'sphere_z_offset'):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f'{name} must be finite and nonnegative')
+        for name in ('max_evaluations', 'max_candidate_voxels', 'max_grid_voxels'):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f'{name} must be a positive integer')
+        for name in ('max_volume_error_mm3', 'max_increment_error_mm3'):
+            value = getattr(self, name)
+            if value is not None and (not math.isfinite(value) or value < 0):
+                raise ValueError(f'{name} must be finite and nonnegative')

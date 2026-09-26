@@ -31,6 +31,12 @@ class GeometryMath:
 
     @staticmethod
     def find_empty_voxels_in_space(voxel_space, lower_indexes, upper_indexes):
+        # Clip both ends before slicing: NumPy negative indices wrap rather
+        # than representing cells outside the nonnegative grid domain.
+        lower_indexes = [max(0, int(i)) for i in lower_indexes]
+        upper_indexes = [min(n - 1, int(i)) for n, i in zip(voxel_space.shape, upper_indexes)]
+        if any(lo > hi for lo, hi in zip(lower_indexes, upper_indexes)):
+            return []
         lower_i, lower_j, lower_k = lower_indexes
         upper_i, upper_j, upper_k = upper_indexes
 

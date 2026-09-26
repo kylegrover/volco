@@ -1,6 +1,6 @@
 # From numerical baseline to measured print prediction
 
-**Status:** agreed direction, not an implemented solver or physical validation. Work on `baseline/trustworthy` first; do not advance `dev`, change the GUI-pinned submodule, or merge experimental physics merely to satisfy this plan. Detailed private evidence lives in the adjacent GUI repository's ignored `notes/`. [Current baseline contracts and limits](BASELINE.md).
+**Status:** B1 now has bounded nearest-candidate deposition, boundary guards and local/cumulative diagnostics; see [NUMERICAL_SEARCH.md](NUMERICAL_SEARCH.md). Physically justified default error/domain limits and B2 export coordinates remain open. This is not physical validation. Work on `baseline/trustworthy` first; do not advance `dev`, change the GUI-pinned submodule, or merge experimental physics merely to satisfy this plan. Detailed private evidence lives in the adjacent GUI repository's ignored `notes/`. [Current baseline contracts and limits](BASELINE.md).
 
 ## Goal and inputs
 
@@ -13,7 +13,9 @@ Use three *distinct* work items:
 
 ## B — finish numerical reliability before physical claims
 
-### B1. Explicit volume-error and finite-search contract (next)
+### B1. Explicit volume-error and finite-search contract (implemented core; policy validation open)
+
+Implemented with failing-first regressions: no tolerance widening, no negative-index wrap, virtual expansion, finite evaluation/candidate/grid budgets, persistent commanded targets across moves, per-step diagnostics and run summaries. Optional cumulative and local absolute residual ceilings reject before commit. Current suite: **79 passed**, including acceleration-enabled integration and finite-lattice candidate comparisons. Operational guardrails are not calibrated physical radius limits; nearest-shell selection alone does not establish an acceptable physical error. The requirements below remain the acceptance goals, not a declaration that every B gate is closed.
 
 For each deposition step, distinguish **requested incremental material**, **requested cumulative occupancy**, **occupied volume before/after**, and **signed cumulative residual**; prior quantization overshoot may mean a step deposits nothing. Report a concise run summary and sufficient bounded diagnostics to explain abnormal steps. Do not infer conservation from STL watertightness, and do not silently discard specified material.
 

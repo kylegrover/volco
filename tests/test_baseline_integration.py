@@ -95,10 +95,11 @@ def test_two_mm_bead_end_to_end(tmp_path, monkeypatch, capsys):
     assert mesh.volume == pytest.approx(actual_volume, abs=1e-5)
 
 
+@pytest.mark.parametrize('acceleration', [False, True])
 @pytest.mark.parametrize("voxel_size,step_size,allowed_error", [
     (0.1, 0.2, 0.05), (0.05, 0.1, 0.025),
 ])
-def test_crossing_beads_material_accounting(voxel_size, step_size, allowed_error, capsys):
+def test_crossing_beads_material_accounting(voxel_size, step_size, allowed_error, acceleration, capsys):
     output = run_simulation(
         gcode="G21\nG90\nM82\nG92 E0\nG0 X0 Y0 Z0.4\n"
               "G1 X2 Y0 E0.1 F600\nG0 X1 Y-1 Z0.4\nG1 X1 Y1 E0.2\n",
@@ -108,10 +109,15 @@ def test_crossing_beads_material_accounting(voxel_size, step_size, allowed_error
         sim_config={"voxel_size": voxel_size, "step_size": step_size,
                     "simulation_name": "cross", "results_folder": "unused",
                     "radius_increment": 0.1, "solver_tolerance": 0.001,
-                    "sphere_z_offset": 0.2, "consider_acceleration": False},
+                    "sphere_z_offset": 0.2, "consider_acceleration": acceleration},
     )
     capsys.readouterr()
     grid = output.voxel_space.space
     occupied = int(np.count_nonzero(grid))
     assert occupied == output.voxel_space._filled_voxels_count
     assert abs(occupied * voxel_size**3 - 0.2 * AREA) <= allowed_error
+    summary = output.voxel_space.volume_summary
+    assert summary['cumulative_target_mm3'] == pytest.approx(0.2 * AREA)
+    assert summary['cumulative_residual_mm3'] == pytest.approx(occupied * voxel_size**3 - 0.2 * AREA)
+    assert summary['steps'] > 0
+    assert output.voxel_space.last_deposition['evaluations'] <= 128

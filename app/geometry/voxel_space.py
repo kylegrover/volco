@@ -87,12 +87,19 @@ class VoxelSpace:
             # Fallback to original allocation if any issue occurs during estimation
             z_dim = self.dimensions["z"]
 
+        shape = (self.dimensions['x'], self.dimensions['y'], z_dim)
+        if any(n <= 0 for n in shape) or math.prod(shape) > getattr(self._simulation, 'max_grid_voxels', 64000000):
+            raise ValueError(f'Initial voxel grid {shape} is empty or exceeds max_grid_voxels')
         self.space = np.zeros(
-            (self.dimensions["x"], self.dimensions["y"], z_dim),
+            shape,
             dtype=np.int8,
         )
-        # reset the running counter when allocating space
+        # Reset occupancy and commanded-volume accounting together.
         self._filled_voxels_count = 0
+        self._commanded_volume = 0.0
+        self.volume_summary = dict(steps=0, quantized_steps=0, max_local_error_mm3=0.0,
+                                   cumulative_target_mm3=0.0, cumulative_residual_mm3=0.0)
+        self.last_deposition = None
 
     def print(self):
         # Check for preview mode in simulation config
@@ -143,6 +150,8 @@ class VoxelSpace:
                 f"Deposited step {number_printed_filaments}/{filament_coordinates_count} (~layer: {number_printed_layers}): "
                 f"from {initial_coordinate} to {final_coordinate}, "
             )
+
+        logger.info('Deposition volume summary (mm3): %s', self.volume_summary)
 
     def print_preview_mode(self):
         """
@@ -288,10 +297,18 @@ class VoxelSpace:
         filament_initial_coordinates,
         volumes,
     ):
-        # Use the running counter to compute total deposited volume quickly
-        total_deposited_volume = (
-            self._filled_voxels_count * self._simulation.voxel_size ** 3
-        )
+        # Targets must survive G-code move boundaries: rebasing on actual
+        # occupancy here used to discard each move's quantization debt.
+        total_deposited_volume = getattr(
+            self, '_commanded_volume', self._filled_voxels_count * self._simulation.voxel_size ** 3)
+        if len(volumes) != number_simulation_steps or any(
+                not math.isfinite(v) or v < 0 or (i and v < volumes[i - 1])
+                for i, v in enumerate(volumes)):
+            raise ValueError('volumes must be finite nonnegative cumulative step targets')
+        if not hasattr(self, 'volume_summary'):
+            self.volume_summary = dict(steps=0, quantized_steps=0, max_local_error_mm3=0.0,
+                                       cumulative_target_mm3=total_deposited_volume,
+                                       cumulative_residual_mm3=0.0)
 
         for step_n in range(0, number_simulation_steps):
 
@@ -348,7 +365,22 @@ class VoxelSpace:
                 voxel_space_target_volume=volume_target,
                 solver_tolerance=self._simulation.solver_tolerance,
                 radius_increment=self._simulation.radius_increment,
+                max_evaluations=getattr(self._simulation, 'max_evaluations', 128),
+                max_candidate_voxels=getattr(self._simulation, 'max_candidate_voxels', 250000),
+                max_grid_voxels=getattr(self._simulation, 'max_grid_voxels', 64000000),
+                max_volume_error_mm3=getattr(self._simulation, 'max_volume_error_mm3', None),
+                max_increment_error_mm3=getattr(self._simulation, 'max_increment_error_mm3', None),
             )
+            self._commanded_volume = volume_target
+            self.last_deposition = sphere.last_deposition
+            if self.last_deposition is not None:
+                report = self.last_deposition
+                summary = self.volume_summary
+                summary['steps'] += 1
+                summary['quantized_steps'] += report['status'] != 'exact'
+                summary['max_local_error_mm3'] = max(summary['max_local_error_mm3'], abs(report['increment_residual_mm3']))
+                summary['cumulative_target_mm3'] = volume_target
+                summary['cumulative_residual_mm3'] = report['cumulative_residual_mm3']
 
             # Ensure our internal `.space` and counter reflect any mutations
             # returned by the sphere logic (voxel_space_out is a VoxelSpace)
