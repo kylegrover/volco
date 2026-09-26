@@ -1,6 +1,7 @@
 """Small parser and end-to-end checks; these do not validate fluid physics."""
 
 import math
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -12,6 +13,21 @@ from volco import run_simulation
 
 
 AREA = math.pi * (1.75 / 2) ** 2
+
+
+def test_zig_bridge_reference_parser_contract():
+    path = Path(__file__).resolve().parents[1] / "examples" / "validation" / "zig_bridge_candidate.gcode"
+    gcode = Gcode(gcode_path=str(path), printer=SimpleNamespace(feedstock_filament_diameter=1.75))
+    gcode.read()
+    assert gcode.number_printed_filaments == 344
+    assert all(a[:3] != b[:3] for a, b, _ in gcode.filaments_coordinates)
+    assert [(a[:3], b[:3]) for a, b, _ in gcode.filaments_coordinates[-2:]] == [
+        ([90.25, 50.0, 2.2], [80.0, 52.0, 2.2]),
+        ([80.0, 52.0, 2.2], [70.0, 50.0, 2.2]),
+    ]
+    assert [volume for _, _, volume in gcode.filaments_coordinates[-2:]] == pytest.approx(
+        [0.347346 * AREA, 0.339188 * AREA]
+    )
 
 
 def test_absolute_extrusion_reset_travel_retraction_and_stationary_deposit():

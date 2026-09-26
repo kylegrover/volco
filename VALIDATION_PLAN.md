@@ -1,0 +1,55 @@
+# From numerical baseline to measured print prediction
+
+**Status:** agreed direction, not an implemented solver or physical validation. Work on `baseline/trustworthy` first; do not advance `dev`, change the GUI-pinned submodule, or merge experimental physics merely to satisfy this plan. Detailed private evidence lives in the adjacent GUI repository's ignored `notes/`. [Current baseline contracts and limits](BASELINE.md).
+
+## Goal and inputs
+
+The long-term goal is to predict **what material geometry a real printer produces**, including effects that change layer shape, voids, overhangs and unsupported strands. Volco currently consumes **G-code extrusion/tool paths**, not an input STL directly: a design STL has to be sliced before its path, flow and timing exist. A usable result must distinguish design geometry, commanded path, numerical voxel geometry, and measured printed geometry. It must state printer, slicer, material, settings and modeled versus unmodeled effects; no output STL is proof of physical fidelity.
+
+Use three *distinct* work items:
+1. **Exact tiny numerical cases:** parser, independent deposition trials, known voxel solids, crop/coordinate frames, bounded error and export parity. These can have strict or resolution-aware assertions.
+2. **Representative everyday workload:** a real sliced bracket or small desk-art piece using layers/depth unusually, supplied with the design file and the actual sliced G-code. Choose one after the file/settings exist, not a contrived cube as the sole speed target. Measure full-run fidelity indicators, wall time and peak memory separately from tiny tests.
+3. **Controlled physical experiment:** the zigged bridge candidate below. It probes one phenomenon (unsupported-span shape/sag), *not* general-purpose correctness, and is not the representative everyday performance benchmark.
+
+## B — finish numerical reliability before physical claims
+
+### B1. Explicit volume-error and finite-search contract (next)
+
+For each deposition step, distinguish **requested incremental material**, **requested cumulative occupancy**, **occupied volume before/after**, and **signed cumulative residual**; prior quantization overshoot may mean a step deposits nothing. Report a concise run summary and sufficient bounded diagnostics to explain abnormal steps. Do not infer conservation from STL watertightness, and do not silently discard specified material.
+
+At finite voxel size, nearest-shell occupancy can jump past the target. Define acceptance with a resolution-aware **local** bound (consider voxel volume, inaccessible region and tied candidate shells); test the rule on empty, overlapping/blocked, stationary and crossing depositions and one refinement pair. A small, explained quantization residual can continue **and be reported**. An unexplained/materially excessive residual, nonfinite/invalid input, or an unreachable target must **fail clearly in finite time**. Bound expansion, search radius/iterations and memory by justified domain limits rather than increasing tolerance indefinitely or hiding error behind a whole-print relative percentage. Choose quantitative thresholds from characterized fixtures; no arbitrary global percentage is established yet. Preserve candidate independence and filled-count consistency. A failed run must not masquerade as a valid result.
+
+Run the full engine suite with the documented command; write a failing regression before changing search semantics. Keep preview's intentionally non-conserving output out of full-simulation material comparisons.
+
+### B2. Normalize geometry coordinates and export (next)
+
+Choose **one cell convention**: grid cell `[i,j,k]` covers `[i*h,(i+1)*h]` per axis; its center is `(i+0.5, j+0.5, k+0.5)*h`. This is already how deposition locates voxel centers. `x_translation = x_offset - min_printed_x`, `y_translation = y_offset - min_printed_y`, `z_translation = 0` in today's `VoxelSpace` initialization. For a crop starting at integer grid index `crop_start`, the corresponding output cell center in input G-code/world coordinates is `(crop_start + local_index + 0.5)*h - (x_translation,y_translation,0)`. Corners use the same rule without `+0.5`; Z sphere deposition offset affects *where material is placed*, not this coordinate-frame transform.
+
+Today low-level STL paths center voxel `[i,j,k]` on `i*h` and `SimulationOutput` omits crop origin/translation. Write exact failing tests at nonzero world coordinates, nonzero XY translations and a nontrivial XYZ crop, for mesh-object, binary and ASCII output. Decide whether low-level voxel exports stay grid-local and the `SimulationOutput` boundary applies the world transform (preferred), then use the **same transform** for all paths. Document the output frame and update test bounds deliberately; changing a half-voxel shift without accounting for crop/world translation is not sufficient. Ensure normals, watertightness and occupied-volume equivalence survive the change. No viewer-side compensation or undocumented STL shifts.
+
+### B exit gate
+
+A documented, green engine suite and tiny full-engine checks with finite/error-reporting deposition, explainable resolution-dependent residuals, and consistent output world bounds across crops/export paths. Repeat GUI tests **separately**; its bundled engine is still old `dev`. Record environment and exact source/config hashes. Baseline promotion and GUI submodule integration are explicit later decisions.
+
+## M — zigged bridge as a candidate physical comparison
+
+The preserved example `examples/validation/zig_bridge_candidate.gcode` is a byte-for-byte copy of `../tiny bridge test.gcode` when added (original Windows-file SHA-256 `df1ab1df6c72f489f5c1fac2304d5c54a0ce98bcf9b2ed1c5696d6f01ff82aa0`; Git may normalize line endings). Its text lines match the older untracked `examples/tiny bridge test.gcode` in stash `9b0b3b2^3` in the separate experimental checkout. Retain original, hash, and any later edited/printed variants; **never silently edit the reference input to fit a desired result**. This is not the older straight `bridge_proper.gcode` or the GUI square sample.
+
+Inspected with this branch's parser and the existing example printer configuration: 446 motion commands, 344 extrusion segments, 0 stationary extrusions, printed XY limits X=68–92/Y=48–52 mm, Z maximum 2.2 mm. After spiral-like towers near `(70,50)` and `(90,50)`, the last two deposited segments run `(90.25,50,2.2) → (80,52,2.2)` and `(80,52,2.2) → (70,50,2.2)` at 40 mm/s, with parsed material 0.835465 and 0.815843 mm³. Thus the commanded midpoint is a **2 mm Y offset**, not a Z droop. The historical code warns about but does not simulate `M140/M104/M190/M109/M106`; intended bed/nozzle/fan states and heating/dwell timings are not currently represented. A normal bridge may droop, but this geometry does **not guarantee** visible sag, and those historical physics STLs/CSV files lack established generating provenance.
+
+**Physical-print preflight (before sending G-code to a machine):** verify nozzle/material/filament diameter, relative extrusion (`M83`), bed/nozzle/fan commands and compatible firmware; visualize all extrusion and travel moves in a slicer; inspect support/contact at both tower tops and travel clearance. The move to the second tower descends from Z=2.2 to 0.2 while crossing X=70.25→88. Do not assume it clears the first tower. Check bed placement/adhesion, E amounts and unsupported span for the intended printer. Revise by creating a *new versioned variant* if necessary, and rerun parser/preflight checks. Do not print blindly or equate syntactically valid G-code with safe G-code.
+
+**Comparison protocol:** first obtain a safe, printable variant with recorded printer, material batch, slicer/toolpath provenance, nozzle/layer size, speeds/flow, fan/temperature and time between tower and bridge. Capture baseline supported-tower geometry and, if feasible, a **straight-span control** with the same supports, speed, extrusion per path length and thermal conditions. A straight path between the same endpoints is shorter than the zig, so total length/volume and time **cannot all be matched simultaneously**: record those differences, or adjust a separately labeled control to isolate a chosen variable. Otherwise label the zig-only result confounded. Measure the extruded bridge centerline in 3D/side view at specified post-print times, with image scale/calibration and repeated prints where practical. Parameterize by commanded **polyline arc length** and sample local cross-sections orthogonal to each leg. Report signed Z displacement relative to commanded Z=2.2 (and measured support heights), midspan and maximum deflection, location of minimum Z and uncertainty; separately report XY deviation from the intended kink. A maximum-Z height map at fixed Y, STL silhouette alone, or difference from a straight chord is not an adequate sag measure. Do not treat the printer's own commanded zig as a physics prediction.
+
+Before fitting physics: test gravity-off/supported controls, time-step/resolution sensitivity, units, temperature timeline, travel chain breaks, material conservation and **whether any deformed representation actually reaches exported geometry**. The old hybrid solver changes segment records without rerasterizing old deposits; grid and filament prototypes have other documented heat/material problems. Do not merge them wholesale. If a model is calibrated against one bridge condition, reserve another span/speed/temperature condition for validation; report mismatch and limitations honestly. Any statement of physical prediction needs observed print geometry, not just agreement between two simulation settings.
+
+## P — performance after the B exit gate
+
+For the real bracket/art file, choose representative voxel/step sizes only after numerical error characterization. Measure parsing, deposition and export separately, total time and process peak memory (including ASCII workers), with hashes/revision/config/environment and output material/geometry checks. Include one tiny correctness case and one bounded stress case. Profile the corrected baseline before selecting a change; preview, coarser grids and altered deposition rules are *not* equal-fidelity speedups. Bridge simulation is a separate physics comparison, not the sole benchmark.
+
+## Open inputs/decisions
+
+- Need an actual bracket/art model plus sliced G-code and print settings to select the everyday workload. Until provided, no performance target or real-print generality claim.
+- Need the intended printer/material and a preflighted bridge variant before printing; physical measurement setup and straight-span control must be decided. No physical measurements have been made yet.
+- Numerical error/finite-search thresholds and crop/world-frame regression expectations require evidence and failing tests, not arbitrary constants.
+- Advancing `dev`, GUI integration, pushing, commercial distribution and final release checks are separate actions. This document authorizes none of them.

@@ -1,6 +1,6 @@
 # Numerical baseline — development checkpoint
 
-This branch starts from Volco `dev` (`8eb866a`) and repairs several *reproducible* regressions. It is an engineering test baseline, **not a validated physical prediction** or a claim to implement all of VOLCO-X. Keep the GUI submodule and any physics experiments separate until integration is explicitly approved.
+This branch starts from Volco `dev` (`8eb866a`) and repairs several *reproducible* regressions. It is an engineering test baseline, **not a validated physical prediction** or a claim to implement all of VOLCO-X. Keep the GUI submodule and any physics experiments separate until integration is explicitly approved. The agreed path toward trustworthy numerical output, a real bracket/art workload, and a candidate zigged-bridge physical comparison is in [VALIDATION_PLAN.md](VALIDATION_PLAN.md). The bridge G-code under `examples/validation/` is a reference candidate, **not a print-ready or physics-validated fixture**.
 
 ## Run tests
 
@@ -23,7 +23,7 @@ uv run --project ../volcogui pytest -q tests
 ## What the tests actually check
 
 - Five obsolete acceleration test imports/usage and printer/parser fixture assumptions were updated rather than hidden. The old one-sided deposited-volume assertion is now a two-sided, fixture-specific bound against **parsed** material volume.
-- Tiny parser examples exercise relative/absolute extrusion, position mode, G92 E0, travel, retraction/recovery and intentional stationary deposition.
+- Tiny parser examples exercise relative/absolute extrusion, position mode, G92 E0, travel, retraction/recovery and intentional stationary deposition. The candidate zigged bridge has a parser-only signature test; it is not run as a physical-prediction assertion.
 - Independent radius trials and accepted counts, volume helper/caller contract, tiny exact-solid surfaces and slice boundaries on all axes, and cross-path watertightness at 0.1 mm.
 - A short bead checks filled-count parity, requested/occupied volume error <= 0.03 mm³ at 0.1 mm voxels, and binary STL volume/voxel-volume parity; crossing beads at 0.1 and 0.05 mm voxel sizes use fixture-specific absolute error limits of 0.05 and 0.025 mm³. These are checks for these inputs, **not general error guarantees** or evidence of monotonic convergence.
 - Test discovery includes unrelated FEA tests; a passing suite does not imply FEA has been independently validated.
@@ -32,7 +32,7 @@ uv run --project ../volcogui pytest -q tests
 
 1. The bisection solver relaxes relative error tolerance as radii get close and has no explicit maximum search radius/iteration count or documented behavior for unreachable targets. Cumulative requested volumes and occupied voxels can differ due to voxel quantization; there is no per-step requested/achieved/residual record or general local error bound. Investigate convergence and give callers a bounded failure/reporting policy before baseline promotion.
 2. G-code parsing and unsupported commands require wider coverage (including transitions between extrusion modes); these passing microcases do not establish broad slicer compatibility. Material semantics for stationary extrusion are intentional and must not be silently dropped.
-3. Crop-origin/translation and output-frame behavior are not reconciled. Known solids are checked before crop; no assertion here says the exported STL is in world G-code coordinates. Avoid compensating in the viewer.
+3. Crop-origin/translation and output-frame behavior are not reconciled. Known solids are checked before crop; no assertion here says the exported STL is in world G-code coordinates. Adopt the cell/world transform and test plan in `VALIDATION_PLAN.md` before changing coordinates. Avoid compensating in the viewer.
 4. Preview writes occupancy without maintaining `_filled_voxels_count`; do not use its counter to assert preview conservation.
 5. No standardized performance measurements or memory bounds were collected. The candidate search still converts empty indices to Python lists, and rejected trials can grow the grid. Check memory/time before declaring the repairs performance-neutral.
 6. Bundled GUI engine remains at old `dev`. GUI tests passing while this branch is separate verifies the GUI was not disturbed, **not** GUI compatibility with this new engine revision. Full packaged-GUI testing and clean-machine checks are separate release tasks.
