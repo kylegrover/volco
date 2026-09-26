@@ -76,7 +76,7 @@ def test_two_mm_bead_end_to_end(tmp_path, monkeypatch, capsys):
     mesh = trimesh.load_mesh(path, force="mesh")
     assert mesh.is_watertight
     assert len(mesh.faces) > 0
-    assert mesh.volume > 0
+    assert mesh.volume == pytest.approx(actual_volume, abs=1e-5)
 
 
 @pytest.mark.parametrize("voxel_size,step_size,allowed_error", [
