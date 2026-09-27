@@ -1,5 +1,10 @@
 # Volco
 
+> **Integration branch note:** see [CONSUMER_INTEGRATION.md](CONSUMER_INTEGRATION.md) for
+> the source-checkout API, current validation scope, parser/resource limits and
+> non-manifold STL warning. This numerical baseline is not a physically validated
+> prediction or an automatic replacement for a bundled GUI engine.
+
 VOLCO (VOLume COnserving) is a model capable of simulating the 3D printing process. It simulates the printing process in a voxelized space and it is capable of predicting the final shape of a 3D printed material.
 
 - Inputs

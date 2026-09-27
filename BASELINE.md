@@ -1,5 +1,11 @@
 # Numerical baseline — development checkpoint
 
+**Current integration snapshot:** `integration/consumer-ready` adds an explicit
+[consumer contract](CONSUMER_INTEGRATION.md) and file-path/export smoke test;
+the current engine suite passes **114 tests**. Earlier 85-pass statements below
+are historical to the initial export repair. The physical camera-angle comparison
+is provisional, and real-workload exports are still non-manifold.
+
 This branch starts from Volco `dev` (`8eb866a`) and repairs several *reproducible* regressions. It is an engineering test baseline, **not a validated physical prediction** or a claim to implement all of VOLCO-X. Keep the GUI submodule and any physics experiments separate until integration is explicitly approved. The agreed path toward trustworthy numerical output, a real bracket/art workload, and a candidate zigged-bridge physical comparison is in [VALIDATION_PLAN.md](VALIDATION_PLAN.md). The bridge G-code under `examples/validation/` is a reference candidate, **not a print-ready or physics-validated fixture**.
 
 ## Run tests
@@ -26,7 +32,7 @@ uv run --project ../volcogui pytest -q tests
 - Tiny parser examples exercise relative/absolute extrusion, position mode, G92 E0, travel, retraction/recovery and intentional stationary deposition. The candidate zigged bridge has a parser-only signature test; it is not run as a physical-prediction assertion.
 - Independent radius trials and accepted counts, volume helper/caller contract, tiny exact-solid surfaces and slice boundaries on all axes, and cross-path watertightness at 0.1 mm.
 - A short bead checks filled-count parity, requested/occupied volume error <= 0.03 mm³ at 0.1 mm voxels, and binary STL volume/voxel-volume parity; crossing beads at 0.1 and 0.05 mm voxel sizes use fixture-specific absolute error limits of 0.05 and 0.025 mm³. These are checks for these inputs, **not general error guarantees** or evidence of monotonic convergence.
-- Crossing-bead integration now covers both uniform and acceleration-aware deposition. Search tests compare against exhaustive finite-lattice candidates at two pitches and multiple phases, including blocked boundaries, and verify failure without mutation on budget/residual-limit exhaustion. Current engine suite: **85 passed**, including world/crop export regressions.
+- Crossing-bead integration now covers both uniform and acceleration-aware deposition. Search tests compare against exhaustive finite-lattice candidates at two pitches and multiple phases, including blocked boundaries, and verify failure without mutation on budget/residual-limit exhaustion. Initial world/crop checkpoint suite: **85 passed**; subsequent cache and consumer-entrypoint additions bring the current suite to **114 passed**.
 - Test discovery includes unrelated FEA tests; a passing suite does not imply FEA has been independently validated.
 
 ## Known limits before calling this a trustworthy numerical reference
