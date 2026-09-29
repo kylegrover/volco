@@ -121,6 +121,97 @@ class PhysicsSolver:
         new_temp_values = (current_mass * old_temp + mass_per_voxel * temperature) / (current_mass + mass_per_voxel)
         temp_slice[mask] = new_temp_values
 
+    def add_segment(self, p1, p2, radius, amount, temperature):
+        """
+        Injects material along a line segment (capsule).
+        """
+        # Bounding box for the segment
+        p_min = np.minimum(p1, p2) - radius
+        p_max = np.maximum(p1, p2) + radius
+        
+        # Convert to indices
+        x_min = max(0, int(p_min[0] / self.voxel_size))
+        x_max = min(self.shape[0], int(p_max[0] / self.voxel_size) + 1)
+        y_min = max(0, int(p_min[1] / self.voxel_size))
+        y_max = min(self.shape[1], int(p_max[1] / self.voxel_size) + 1)
+        z_min = max(0, int(p_min[2] / self.voxel_size))
+        z_max = min(self.shape[2], int(p_max[2] / self.voxel_size) + 1)
+        
+        # Update active bounds
+        if not self.has_active_material:
+            self.active_bounds = {
+                'x_min': x_min, 'x_max': x_max,
+                'y_min': y_min, 'y_max': y_max,
+                'z_min': z_min, 'z_max': z_max
+            }
+            self.has_active_material = True
+        else:
+            self.active_bounds['x_min'] = min(self.active_bounds['x_min'], x_min)
+            self.active_bounds['x_max'] = max(self.active_bounds['x_max'], x_max)
+            self.active_bounds['y_min'] = min(self.active_bounds['y_min'], y_min)
+            self.active_bounds['y_max'] = max(self.active_bounds['y_max'], y_max)
+            self.active_bounds['z_min'] = min(self.active_bounds['z_min'], z_min)
+            self.active_bounds['z_max'] = max(self.active_bounds['z_max'], z_max)
+
+        # Create coordinate grids
+        x_range = np.arange(x_min, x_max)
+        y_range = np.arange(y_min, y_max)
+        z_range = np.arange(z_min, z_max)
+        
+        if len(x_range) == 0 or len(y_range) == 0 or len(z_range) == 0:
+            return
+
+        X, Y, Z = np.meshgrid(x_range, y_range, z_range, indexing='ij')
+        
+        pX = (X + 0.5) * self.voxel_size
+        pY = (Y + 0.5) * self.voxel_size
+        pZ = (Z + 0.5) * self.voxel_size
+        
+        # Segment SDF
+        ba = p2 - p1
+        ba_dot_ba = np.dot(ba, ba)
+        
+        if ba_dot_ba < 1e-8:
+            # Point case
+            dist_sq = (pX - p1[0])**2 + (pY - p1[1])**2 + (pZ - p1[2])**2
+        else:
+            # Vectorized projection
+            pa_x = pX - p1[0]
+            pa_y = pY - p1[1]
+            pa_z = pZ - p1[2]
+            
+            h = np.clip((pa_x * ba[0] + pa_y * ba[1] + pa_z * ba[2]) / ba_dot_ba, 0.0, 1.0)
+            
+            dx = pa_x - ba[0] * h
+            dy = pa_y - ba[1] * h
+            dz = pa_z - ba[2] * h
+            
+            dist_sq = dx*dx + dy*dy + dz*dz
+            
+        mask = dist_sq <= (radius**2)
+        count = np.sum(mask)
+        
+        if count == 0:
+            # Fallback to closest voxel
+            min_idx = np.unravel_index(np.argmin(dist_sq), dist_sq.shape)
+            mask = np.zeros_like(mask, dtype=bool)
+            mask[min_idx] = True
+            count = 1
+            
+        # Distribute mass
+        mass_per_voxel = amount / count
+        
+        # Update Grid
+        mass_slice = self.mass[x_min:x_max, y_min:y_max, z_min:z_max]
+        temp_slice = self.temperature[x_min:x_max, y_min:y_max, z_min:z_max]
+        
+        current_mass = mass_slice[mask]
+        mass_slice[mask] += mass_per_voxel
+        
+        old_temp = temp_slice[mask]
+        new_temp_values = (current_mass * old_temp + mass_per_voxel * temperature) / (current_mass + mass_per_voxel)
+        temp_slice[mask] = new_temp_values
+
     def step(self, dt):
         """
         Evolves the physics state by one time step.

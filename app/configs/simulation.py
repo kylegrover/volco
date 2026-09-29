@@ -66,3 +66,10 @@ class Simulation:
         self.viscosity_solid = config.get("viscosity_solid", 10000.0)
         self.gravity_factor = config.get("gravity_factor", 0.1)
         self.spread_factor = config.get("spread_factor", 0.05)
+
+        # Filament (Lagrangian) Physics Settings
+        self.filament_spring_k = config.get("filament_spring_k", 100.0)  # Spring stiffness
+        self.filament_damping = config.get("filament_damping", 0.5)      # Damping factor (0-1)
+        self.filament_segment_length = config.get("filament_segment_length", self.voxel_size) # Ideal distance between nodes
+        self.filament_collision_radius = config.get("filament_collision_radius", self.voxel_size * 0.5)
+

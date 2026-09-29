@@ -9,6 +9,7 @@ from app.instructions.instruction import Instruction
 from app.geometry.geometry_math import GeometryMath
 from app.physics.volume import Volume
 from app.physics.solver import PhysicsSolver
+from app.physics.filament_solver import FilamentSolver
 
 
 logger = logging.getLogger(__name__)
@@ -102,8 +103,13 @@ class VoxelSpace:
                 voxel_size=self._simulation.voxel_size,
                 config=self._simulation
             )
+            self.filament_solver = FilamentSolver(
+                config=self._simulation,
+                physics_solver=self.physics_solver
+            )
         else:
             self.physics_solver = None
+            self.filament_solver = None
 
     def print(self):
         # Check for preview mode in simulation config
@@ -114,7 +120,7 @@ class VoxelSpace:
         number_printed_filaments = 0
         number_printed_layers = 0
         initial_z_coordinate = 0.0
-        print(self._instruction.filaments_coordinates)
+        # print(self._instruction.filaments_coordinates)
         for filament_coordinates in self._instruction.filaments_coordinates:
             (
                 initial_coordinate,
@@ -159,8 +165,61 @@ class VoxelSpace:
         # Final sync for physics mode
         if self.physics_solver:
             logger.info("Finalizing physics simulation...")
-            # Run a few extra steps to let things settle?
-            # self.physics_solver.step(1.0) 
+            
+            # Flush any remaining nodes in the filament solver
+            # We can just force-freeze them or let them settle
+            # Let's run a few seconds of simulation to let the last strand settle
+            settle_time = 2.0 # seconds
+            settle_steps = 20
+            dt = settle_time / settle_steps
+            
+            for _ in range(settle_steps):
+                frozen_segments = self.filament_solver.step(dt)
+                for i, segment in enumerate(frozen_segments):
+                    p1, p2, radius, mass, temp = segment
+                    
+                    # Ensure bounds for p1
+                    shift_vec = self._ensure_physics_bounds(p1, radius)
+                    if shift_vec is not None:
+                        p1 += shift_vec
+                        p2 += shift_vec
+                        # Shift remaining segments in the list
+                        for j in range(i+1, len(frozen_segments)):
+                            s_p1, s_p2, s_r, s_m, s_t = frozen_segments[j]
+                            frozen_segments[j] = (s_p1 + shift_vec, s_p2 + shift_vec, s_r, s_m, s_t)
+
+                    # Ensure bounds for p2
+                    shift_vec = self._ensure_physics_bounds(p2, radius)
+                    if shift_vec is not None:
+                        p1 += shift_vec
+                        p2 += shift_vec
+                        # Shift remaining segments in the list
+                        for j in range(i+1, len(frozen_segments)):
+                            s_p1, s_p2, s_r, s_m, s_t = frozen_segments[j]
+                            frozen_segments[j] = (s_p1 + shift_vec, s_p2 + shift_vec, s_r, s_m, s_t)
+
+                    self.physics_solver.add_segment(p1, p2, radius, mass, temp)
+                self.physics_solver.step(dt)
+            
+            # Force rasterize any remaining nodes as segments
+            nodes = self.filament_solver.nodes
+            if len(nodes) > 1:
+                for i in range(len(nodes) - 1):
+                    n1 = nodes[i]
+                    n2 = nodes[i+1]
+                    
+                    # Ensure bounds (this updates n1.position and n2.position in-place via shift_nodes)
+                    self._ensure_physics_bounds(n1.position, n1.radius)
+                    self._ensure_physics_bounds(n2.position, n2.radius)
+                    
+                    self.physics_solver.add_segment(
+                        p1=n1.position,
+                        p2=n2.position,
+                        radius=n2.radius,
+                        amount=n2.mass,
+                        temperature=n2.temperature
+                    )
+
             self.space = self.physics_solver.get_voxel_grid()
             self._filled_voxels_count = np.count_nonzero(self.space)
             logger.info(f"Physics simulation complete. Filled voxels: {self._filled_voxels_count}")
@@ -276,16 +335,115 @@ class VoxelSpace:
         t_end = time.perf_counter()
         logger.info(f"[Profile]: Voxel filling complete. Time: {t_end-t_start:.2f}s, Segments: {processed}")
 
+    def _ensure_physics_bounds(self, position, radius):
+        """
+        Ensures that the given position (and radius) fits within the physics grid.
+        Expands the grid (and shifts coordinates) if necessary.
+        """
+        if not self.physics_solver:
+            return
+
+        voxel_size = self._simulation.voxel_size
+        
+        # Calculate required bounds (indices)
+        # position is in Grid Coordinates (mm)
+        
+        # Min/Max extent of the new material
+        p_min = position - radius
+        p_max = position + radius
+        
+        # Required indices
+        # We use floor for min and ceil for max to be safe
+        req_x_min = int(math.floor(p_min[0] / voxel_size))
+        req_y_min = int(math.floor(p_min[1] / voxel_size))
+        req_z_min = int(math.floor(p_min[2] / voxel_size))
+        
+        req_x_max = int(math.ceil(p_max[0] / voxel_size))
+        req_y_max = int(math.ceil(p_max[1] / voxel_size))
+        req_z_max = int(math.ceil(p_max[2] / voxel_size))
+        
+        # Current shape
+        sx, sy, sz = self.physics_solver.shape
+        
+        # Check for expansion
+        expand_neg_x = max(0, -req_x_min)
+        expand_neg_y = max(0, -req_y_min)
+        expand_neg_z = max(0, -req_z_min)
+        
+        expand_pos_x = max(0, req_x_max - sx)
+        expand_pos_y = max(0, req_y_max - sy)
+        expand_pos_z = max(0, req_z_max - sz)
+        
+        # SAFETY CHECK: Prevent massive expansions due to flying nodes
+        max_expansion = 2000 # 2000 voxels = 200mm
+        if (expand_neg_x > max_expansion or expand_neg_y > max_expansion or expand_neg_z > max_expansion or
+            expand_pos_x > max_expansion or expand_pos_y > max_expansion or expand_pos_z > max_expansion):
+            logger.error(f"Requested grid expansion too large! Neg: ({expand_neg_x}, {expand_neg_y}, {expand_neg_z}), Pos: ({expand_pos_x}, {expand_pos_y}, {expand_pos_z}). Ignoring expansion request.")
+            return None
+
+        if (expand_neg_x == 0 and expand_neg_y == 0 and expand_neg_z == 0 and
+            expand_pos_x == 0 and expand_pos_y == 0 and expand_pos_z == 0):
+            return
+            
+        # Calculate new shape
+        new_sx = sx + expand_neg_x + expand_pos_x
+        new_sy = sy + expand_neg_y + expand_pos_y
+        new_sz = sz + expand_neg_z + expand_pos_z
+        
+        new_shape = (new_sx, new_sy, new_sz)
+        
+        # Offset for old data in new grid
+        offset = (expand_neg_x, expand_neg_y, expand_neg_z)
+        
+        logger.info(f"Expanding Physics Grid: {self.physics_solver.shape} -> {new_shape}, Offset: {offset}")
+        
+        # Expand Physics Solver
+        self.physics_solver.expand(new_shape, offset)
+        
+        # Expand VoxelSpace.space (int8 grid)
+        # We need to do the same expansion
+        new_space = np.zeros(new_shape, dtype=np.int8)
+        new_space[offset[0]:offset[0]+sx, offset[1]:offset[1]+sy, offset[2]:offset[2]+sz] = self.space
+        self.space = new_space
+        
+        # If we expanded negatively, we shifted the origin.
+        # We must update:
+        # 1. filament_translations (so future G-code maps to the new coordinate system)
+        # 2. FilamentSolver nodes (so existing nodes map to the new coordinate system)
+        
+        if expand_neg_x > 0 or expand_neg_y > 0 or expand_neg_z > 0:
+            shift_vec = np.array([
+                expand_neg_x * voxel_size,
+                expand_neg_y * voxel_size,
+                expand_neg_z * voxel_size
+            ])
+            
+            # Update translations
+            self.filament_translations["x"] += shift_vec[0]
+            self.filament_translations["y"] += shift_vec[1]
+            
+            if "z" not in self.filament_translations:
+                self.filament_translations["z"] = 0.0
+            self.filament_translations["z"] += shift_vec[2]
+            
+            # Shift FilamentSolver nodes
+            self.filament_solver.shift_nodes(shift_vec)
+            
+            return shift_vec
+            
+        return None
+
     def _find_initial_and_final_filament_coordinates(self, filament_coordinates):
+        z_offset = self.filament_translations.get("z", 0.0)
         initial = [
             filament_coordinates[0][0] + self.filament_translations["x"],
             filament_coordinates[0][1] + self.filament_translations["y"],
-            filament_coordinates[0][2],
+            filament_coordinates[0][2] + z_offset,
         ]
         final = (
             filament_coordinates[1][0] + self.filament_translations["x"],
             filament_coordinates[1][1] + self.filament_translations["y"],
-            filament_coordinates[1][2],
+            filament_coordinates[1][2] + z_offset,
         )
         return initial, final
 
@@ -367,27 +525,64 @@ class VoxelSpace:
                 if self.space.shape != self.physics_solver.shape:
                     self.physics_solver.expand(self.space.shape, (0, 0, 0))
                 
-                # 2. Add Material
+                # 2. Add Material to Filament Solver (Lagrangian)
                 dt = step_size / printing_speed if printing_speed and printing_speed > 0 else 0.0
                 
                 # Use a default extrusion temp if not specified (e.g. 220C)
-                # Ideally this should come from printer config or gcode
                 extrusion_temp = 220.0 
                 
-                self.physics_solver.add_material(
-                    center=centre_coordinates,
-                    radius=injection_radius,
-                    amount=sphere_volume,
-                    temperature=extrusion_temp
+                # Add node to the active chain
+                # We use the nozzle velocity as the initial velocity of the material?
+                # Or just zero relative to nozzle?
+                # Let's assume it comes out at the speed of the print head (roughly)
+                # or we can calculate E-speed. For now, just use direction * printing_speed
+                
+                initial_velocity = [d * printing_speed for d in direction_vector]
+                
+                self.filament_solver.add_node(
+                    position=centre_coordinates,
+                    velocity=initial_velocity,
+                    mass=sphere_volume,
+                    temperature=extrusion_temp,
+                    radius=injection_radius
                 )
                 
-                # 3. Step Physics
+                # 3. Step Filament Physics
+                # This returns segments that have collided/frozen and need to be rasterized
+                frozen_segments = []
+                if dt > 0:
+                    # We might want to sub-step if dt is large
+                    frozen_segments = self.filament_solver.step(dt)
+                
+                # 4. Rasterize Frozen Segments into Grid (Eulerian)
+                for i, segment in enumerate(frozen_segments):
+                    p1, p2, radius, mass, temp = segment
+                    
+                    # Ensure bounds for p1
+                    shift_vec = self._ensure_physics_bounds(p1, radius)
+                    if shift_vec is not None:
+                        p1 += shift_vec
+                        p2 += shift_vec
+                        # Shift remaining segments in the list
+                        for j in range(i+1, len(frozen_segments)):
+                            s_p1, s_p2, s_r, s_m, s_t = frozen_segments[j]
+                            frozen_segments[j] = (s_p1 + shift_vec, s_p2 + shift_vec, s_r, s_m, s_t)
+
+                    # Ensure bounds for p2
+                    shift_vec = self._ensure_physics_bounds(p2, radius)
+                    if shift_vec is not None:
+                        p1 += shift_vec
+                        p2 += shift_vec
+                        # Shift remaining segments in the list
+                        for j in range(i+1, len(frozen_segments)):
+                            s_p1, s_p2, s_r, s_m, s_t = frozen_segments[j]
+                            frozen_segments[j] = (s_p1 + shift_vec, s_p2 + shift_vec, s_r, s_m, s_t)
+
+                    self.physics_solver.add_segment(p1, p2, radius, mass, temp)
+                
+                # 5. Step Grid Physics (Cooling, Flow)
                 if dt > 0:
                     self.physics_solver.step(dt)
-                
-                # Update filled voxels count (approximate, or sync later)
-                # For now, we don't update _filled_voxels_count accurately in physics mode
-                # until we sync back.
                 
             else:
                 # Geometric Mode

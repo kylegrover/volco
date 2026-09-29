@@ -1,0 +1,23 @@
+{
+    "voxel_size": 0.1,
+    "step_size": 0.2,
+    "x_offset": 5.0,
+    "y_offset": 5.0,
+    "z_offset": 0,
+    "sphere_z_offset": 0.2,
+    "simulation_name": "Test_volco_physics",
+    "results_folder": "Results_bridge_physics",
+    "radius_increment": 0.1,
+    "solver_tolerance": 0.0001,
+    "x_crop": ["all", "all"],
+    "y_crop": ["all", "all"],
+    "z_crop": ["all", "all"],
+    "consider_acceleration": false,
+    "stl_ascii": false,
+    "physics_enabled": true,
+    "gravity_factor": 20.0,
+    "filament_spring_k": 10.0,
+    "filament_damping": 0.5,
+    "filament_segment_length": 0.1,
+    "filament_collision_radius": 0.05
+}

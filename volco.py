@@ -10,7 +10,7 @@ from app.instructions.gcode import Gcode
 from app.reporter.report import SimulationOutput
 
 
-logging.basicConfig(format="%(levelname)s %(asctime)s %(message)s", level=logging.INFO)
+logging.basicConfig(format="%(levelname)s %(asctime)s %(message)s", level=logging.DEBUG)
 
 
 def run_simulation(
@@ -98,6 +98,14 @@ def run_simulation(
     
     # Crop the voxel space
     output.crop_voxel_space()
+
+    # Save voxel data for inspection
+    import numpy as np
+    import os
+    results_folder = simulation.results_folder
+    if not os.path.exists(results_folder):
+        os.makedirs(results_folder)
+    np.savez_compressed(os.path.join(results_folder, f"{simulation.simulation_name}_voxels.npz"), voxels=output.cropped_voxel_space, voxel_size=simulation.voxel_size)
 
     # Debug: Log stl_ascii setting
     # logger.info(f"[Volco]: stl_ascii setting is {getattr(simulation, 'stl_ascii', 'Not Set')}")
